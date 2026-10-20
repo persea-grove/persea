@@ -355,9 +355,13 @@ async fn web_session_guacd_failure_kills_browser_and_frees_display() {
         log = start_log.display()
     );
     std::fs::write(&chromium_path, chromium_src).expect("write chromium stand-in");
-    for p in [&xvnc_path, &chromium_path] {
-        std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755))
-            .expect("chmod browser stand-in");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for p in [&xvnc_path, &chromium_path] {
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod browser stand-in");
+        }
     }
 
     // Two display slots (validation requires start < end, and the range
