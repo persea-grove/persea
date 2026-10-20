@@ -11,9 +11,11 @@
         </div>
         <div class="flex items-center gap-3">
             <input type="search" id="recordings-search" placeholder="Search recordings..."
-                class="form-input w-64">
+                class="form-input w-64" aria-label="Search recordings">
         </div>
     </div>
+
+    <div id="recordings-error" class="hidden alert alert-error" role="alert" aria-live="polite"></div>
 
     <div id="recordings-empty" class="hidden text-center py-16">
         <svg class="mx-auto h-12 w-12 text-[var(--text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -42,7 +44,7 @@
     </div>
 
     <!-- Player modal -->
-    <div id="player-section" class="hidden fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6">
+    <div id="player-section" class="hidden fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6" role="dialog" aria-modal="true" aria-labelledby="player-title" aria-hidden="true">
         <div class="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl w-full max-w-7xl max-h-[90vh] flex flex-col">
             <div id="player-header" class="flex items-center justify-between px-4 py-3 border-b border-[var(--border)]">
                 <span id="player-title" class="text-sm font-medium text-[var(--text-secondary)]">Playback</span>
@@ -55,9 +57,9 @@
                 <button id="play-btn" class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-[var(--text-primary)] rounded text-sm font-medium transition-colors">Play</button>
                 <button id="fullscreen-btn" class="p-1.5 text-[var(--text-muted)] hover:text-[var(--text-primary)] rounded transition-colors" title="Toggle fullscreen" aria-label="Toggle fullscreen">
                     <svg id="fs-icon-enter" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/></svg>
-                    <svg id="fs-icon-exit" class="w-5 h-5 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4m0 0h4M4 4v4m16-4h-4m4 0v4M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/></svg>
+                    <svg id="fs-icon-exit" class="w-5 h-5 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15"/></svg>
                 </button>
-                <input type="range" id="seek-slider" min="0" max="1000" value="0" class="flex-1" style="accent-color:#10b981">
+                <input type="range" id="seek-slider" min="0" max="1000" value="0" class="flex-1" style="accent-color:#10b981" aria-label="Playback position">
                 <span id="player-time" class="text-xs text-[var(--text-muted)]">0:00 / 0:00</span>
             </div>
         </div>
@@ -111,6 +113,25 @@
 (function() {
     var searchInput = document.getElementById('recordings-search');
     var searchTimer = null;
+    var errBox = document.getElementById('recordings-error');
+
+    function listFail(msg) {
+        errBox.textContent = msg;
+        errBox.classList.remove('hidden');
+    }
+    function clearListError() { errBox.classList.add('hidden'); }
+
+    // Event delegation for play/delete buttons — registered once; the list
+    // body is re-rendered on every refresh, so a listener inside the fetch
+    // chain would stack one per load.
+    document.getElementById('recordings-list').addEventListener('click', function(ev) {
+        var btn = ev.target.closest('.rec-play, .rec-delete');
+        if (!btn) return;
+        var file = btn.getAttribute('data-file');
+        var title = btn.getAttribute('data-title');
+        if (btn.classList.contains('rec-play')) playRecording(file, title);
+        else if (btn.classList.contains('rec-delete')) deleteRecording(file, title);
+    });
 
     // Human-readable recording name: `YYYY-MM-DD HH:MM — <entry> — <user>`
     // (server local time from created_at, pre-formatted by the API as
@@ -140,11 +161,17 @@
         var url = '/api/recordings';
         if (query) url += '?q=' + encodeURIComponent(query);
         fetch(url, { credentials: 'same-origin' })
-            .then(function(r) { return r.ok ? r.json() : []; })
+            .then(function(r) {
+                if (r.status === 401) { window.location.href = '/'; return null; }
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
             .then(function(data) {
                 var list = document.getElementById('recordings-list');
                 var empty = document.getElementById('recordings-empty');
                 var content = document.getElementById('recordings-content');
+                if (data === null) return; // 401 redirect above
+                clearListError();
                 var items = Array.isArray(data) ? data : (data.recordings || []);
                 if (items.length === 0) {
                     empty.classList.remove('hidden');
@@ -167,11 +194,14 @@
                     var duration = rec.duration_secs != null ? formatDuration(rec.duration_secs) : '—';
                     var date = (rec.modified || rec.created_at || '').replace('T', ' ').slice(0, 19) || '—';
                     var protoColors = {
-                        SSH: 'bg-green-900/50 text-green-300 border-green-800',
-                        RDP: 'bg-blue-900/50 text-blue-300 border-blue-800',
-                        VNC: 'bg-orange-900/50 text-orange-300 border-orange-800',
-                        SPICE: 'bg-purple-900/50 text-purple-300 border-purple-800',
-                        WEB: 'bg-teal-900/50 text-teal-300 border-teal-800',
+                        SSH: 'proto-ssh',
+                        RDP: 'proto-rdp',
+                        VNC: 'proto-vnc',
+                        SPICE: 'proto-spice',
+                        WEB: 'proto-web',
+                        VMWARE: 'proto-vmware',
+                        PROXMOX: 'proto-proxmox',
+                        VDI: 'proto-vdi',
                     };
                     var colorClass = protoColors[protocol] || 'bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border)]';
                     return '<tr class="hover:bg-[var(--bg-hover)]/50 transition-colors">' +
@@ -186,18 +216,10 @@
                         '</td>' +
                         '</tr>';
                 }).join('');
-
-                // Event delegation for play/delete buttons
-                list.addEventListener('click', function(ev) {
-                    var btn = ev.target.closest('.rec-play, .rec-delete');
-                    if (!btn) return;
-                    var file = btn.getAttribute('data-file');
-                    var title = btn.getAttribute('data-title');
-                    if (btn.classList.contains('rec-play')) playRecording(file, title);
-                    else if (btn.classList.contains('rec-delete')) deleteRecording(file, title);
-                });
             })
-            .catch(function() {});
+            .catch(function(e) {
+                listFail('Could not load recordings \u2014 ' + (e && e.message ? e.message : 'network error') + '.');
+            });
     }
 
     // ── Player (Guacamole SessionRecording over StaticHTTPTunnel) ─────
@@ -235,7 +257,13 @@
         return h > 0 ? h + ':' + mm + ':' + ss : mm + ':' + ss;
     }
 
+    var lastFocused = null;
     function closePlayer() {
+        playerSection.setAttribute('aria-hidden', 'true');
+        if (lastFocused && typeof lastFocused.focus === 'function') {
+            try { lastFocused.focus(); } catch (e) { /* detached */ }
+        }
+        lastFocused = null;
         if (currentRecording) {
             try { currentRecording.pause(); } catch (e) {}
             currentRecording = null;
@@ -287,12 +315,21 @@
     document.addEventListener('webkitfullscreenchange', updateFullscreenUI);
     window.addEventListener('resize', scaleRecordingDisplay);
 
+    // Dialog a11y: Escape closes the player overlay when it is visible.
+    // Per-page handling (static/js/modal.js is unused; see the note there).
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && !playerSection.classList.contains('hidden')) closePlayer();
+    });
+
     window.playRecording = function(name, title) {
         closePlayer();
+        lastFocused = document.activeElement;
 
         document.getElementById('player-title').textContent = 'Playback: ' + (title || name);
         var section = document.getElementById('player-section');
         section.classList.remove('hidden');
+        section.setAttribute('aria-hidden', 'false');
+        document.getElementById('player-close').focus();
 
         var tunnel = new Guacamole.StaticHTTPTunnel(
             '/api/recordings/' + encodeURIComponent(name),
@@ -342,7 +379,13 @@
         fetch('/api/recordings/' + encodeURIComponent(file), {
             method: 'DELETE',
             credentials: 'same-origin'
-        }).then(function() { loadRecordings(); });
+        }).then(function(r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            clearListError();
+            loadRecordings();
+        }).catch(function(e) {
+            listFail('Failed to delete recording \u2014 ' + (e && e.message ? e.message : 'network error') + '.');
+        });
     };
 
     document.getElementById('player-close').addEventListener('click', closePlayer);

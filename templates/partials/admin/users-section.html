@@ -13,8 +13,8 @@
     <div class="flex items-center gap-4 mb-4">
         <input type="text" id="user-search" placeholder="Search by name or email..."
                name="q"
-               class="form-input flex-1">
-        <select id="role-filter" name="role_filter"
+               class="form-input flex-1" aria-label="Search users">
+        <select id="role-filter" name="role_filter" aria-label="Filter by role"
                 class="form-input w-40 shrink-0">
             <option value="">All Roles</option>
             <option value="admin">Admin</option>
@@ -22,7 +22,7 @@
             <option value="operator">Operator</option>
             <option value="viewer">Viewer</option>
         </select>
-        <select id="status-filter" name="status_filter"
+        <select id="status-filter" name="status_filter" aria-label="Filter by status"
                 class="form-input w-40 shrink-0">
             <option value="">All Status</option>
             <option value="active">Active</option>
@@ -66,19 +66,19 @@
             <div class="space-y-4">
                 <div>
                     <label class="form-label">Name</label>
-                    <input type="text" name="name" required class="form-input">
+                    <input type="text" name="name" required class="form-input" aria-label="User name">
                 </div>
                 <div>
                     <label class="form-label">Email</label>
-                    <input type="email" name="email" required class="form-input">
+                    <input type="email" name="email" required class="form-input" aria-label="User email">
                 </div>
                 <div>
                     <label class="form-label">Password</label>
-                    <input type="password" name="password" required class="form-input" minlength="8">
+                    <input type="password" name="password" required class="form-input" minlength="8" aria-label="User password">
                 </div>
                 <div>
                     <label class="form-label">Role</label>
-                    <select name="role" class="form-input">
+                    <select name="role" class="form-input" aria-label="User role">
                         <option value="viewer">Viewer</option>
                         <option value="operator">Operator</option>
                         <option value="poweruser">Power User</option>
@@ -102,7 +102,7 @@
             <input type="hidden" name="email" id="edit-role-email">
             <div class="mb-4">
                 <label class="form-label">System Role</label>
-                <select name="role" id="edit-role-value" class="form-input">
+                <select name="role" id="edit-role-value" class="form-input" aria-label="System role">
                     <option value="">No system role</option>
                     <option value="viewer">Viewer</option>
                     <option value="operator">Operator</option>
@@ -112,7 +112,7 @@
             </div>
             <div class="mb-4">
                 <label class="form-label">Custom Role</label>
-                <select id="edit-role-custom" class="form-input">
+                <select id="edit-role-custom" class="form-input" aria-label="Custom role">
                     <option value="">No custom role</option>
                 </select>
             </div>
@@ -133,16 +133,16 @@
             <div class="space-y-4">
                 <div>
                     <label class="form-label">Name</label>
-                    <input type="text" name="name" id="edit-user-name" class="form-input">
+                    <input type="text" name="name" id="edit-user-name" class="form-input" aria-label="User name">
                 </div>
                 <div>
                     <label class="form-label">Email</label>
-                    <input type="email" name="email" id="edit-user-email-input" class="form-input">
+                    <input type="email" name="email" id="edit-user-email-input" class="form-input" aria-label="User email">
                     <p id="edit-user-email-note" class="hidden text-xs text-[var(--text-muted)] mt-1">Email is managed by the identity provider for this user.</p>
                 </div>
                 <div>
                     <label class="form-label">New Password</label>
-                    <input type="password" name="password" id="edit-user-password" class="form-input" placeholder="Leave blank to keep the current password">
+                    <input type="password" name="password" id="edit-user-password" class="form-input" aria-label="New password" placeholder="Leave blank to keep the current password">
                     <p id="edit-user-password-note" class="hidden text-xs text-[var(--text-muted)] mt-1">Password is managed by the identity provider for this user.</p>
                 </div>
             </div>

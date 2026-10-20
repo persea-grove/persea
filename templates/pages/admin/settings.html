@@ -119,6 +119,7 @@
             </div>
 
             <form id="settings-form" hx-put="/api/system/settings" hx-ext="json-enc" hx-swap="none"
+                  hx-disabled-elt="find button[type='submit']"
                   class="space-y-6">
 
                 <!-- Session -->
@@ -131,22 +132,22 @@
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <div>
                                 <label class="form-label">Listen Address</label>
-                                <input type="text" name="listen_addr" value="0.0.0.0:8089" class="form-input">
+                                <input type="text" name="listen_addr" value="0.0.0.0:8089" class="form-input" aria-label="Listen address">
                             </div>
                             <div>
                                 <label class="form-label">guacd Address</label>
-                                <input type="text" name="guacd_addr" value="127.0.0.1:4822" class="form-input">
+                                <input type="text" name="guacd_addr" value="127.0.0.1:4822" class="form-input" aria-label="guacd address">
                             </div>
                             <div>
                                 <label class="form-label">TLS Certificate</label>
                                 <div class="flex items-center gap-2">
-                                    <input type="text" name="tls_cert_path" placeholder="Not configured" class="flex-1 px-3 py-2 bg-[var(--bg-card)] border border-[var(--border)] rounded-lg text-[var(--text-primary)] text-sm">
+                                    <input type="text" name="tls_cert_path" placeholder="Not configured" aria-label="TLS certificate path" class="flex-1 px-3 py-2 bg-[var(--bg-card)] border border-[var(--border)] rounded-lg text-[var(--text-primary)] text-sm">
                                     <span id="tls-status" class="px-2 py-0.5 text-xs rounded border bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border)]">Not Set</span>
                                 </div>
                             </div>
                             <div>
                                 <label class="form-label">TLS Key</label>
-                                <input type="text" name="tls_key_path" placeholder="Not configured" class="form-input">
+                                <input type="text" name="tls_key_path" placeholder="Not configured" class="form-input" aria-label="TLS key path">
                             </div>
                         </div>
                     </div>
@@ -159,17 +160,17 @@
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <div>
                                 <label class="form-label">Max Duration (seconds)</label>
-                                <input type="number" name="session_max_duration_secs" value="28800" class="form-input">
+                                <input type="number" name="session_max_duration_secs" value="28800" class="form-input" aria-label="Maximum session duration in seconds">
                                 <p class="text-xs text-[var(--text-muted)] mt-1">8 hours default</p>
                             </div>
                             <div>
                                 <label class="form-label">Concurrent Session Limit</label>
-                                <input type="number" name="max_concurrent_sessions" value="0" class="form-input">
+                                <input type="number" name="max_concurrent_sessions" value="0" class="form-input" aria-label="Concurrent session limit">
                                 <p class="text-xs text-[var(--text-muted)] mt-1">0 = unlimited</p>
                             </div>
                             <div>
                                 <label class="form-label">History Retention (days)</label>
-                                <input type="number" name="session_history_retention_days" value="90" class="form-input">
+                                <input type="number" name="session_history_retention_days" value="90" class="form-input" aria-label="Session history retention in days">
                             </div>
                         </div>
                     </div>
@@ -193,19 +194,19 @@
                                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                     <div>
                                         <label class="form-label">Width (pixels)</label>
-                                        <input type="number" name="default_rdp_width" value="1920" class="form-input">
+                                        <input type="number" name="default_rdp_width" value="1920" class="form-input" aria-label="Default RDP width in pixels">
                                     </div>
                                     <div>
                                         <label class="form-label">Height (pixels)</label>
-                                        <input type="number" name="default_rdp_height" value="1080" class="form-input">
+                                        <input type="number" name="default_rdp_height" value="1080" class="form-input" aria-label="Default RDP height in pixels">
                                     </div>
                                     <div>
                                         <label class="form-label">DPI</label>
-                                        <input type="number" name="default_rdp_dpi" value="96" class="form-input">
+                                        <input type="number" name="default_rdp_dpi" value="96" class="form-input" aria-label="Default RDP DPI">
                                     </div>
                                     <div>
                                         <label class="form-label">Security Mode</label>
-                                        <select name="default_rdp_security" class="form-input">
+                                        <select name="default_rdp_security" class="form-input" aria-label="Default RDP security mode">
                                             <option value="any">any</option>
                                             <option value="rdp">rdp</option>
                                             <option value="tls">tls</option>
@@ -214,7 +215,7 @@
                                     </div>
                                     <div>
                                         <label class="form-label">Auth Package</label>
-                                        <select name="default_rdp_auth_pkg" class="form-input">
+                                        <select name="default_rdp_auth_pkg" class="form-input" aria-label="Default RDP auth package">
                                             <option value="">Default</option>
                                             <option value="ntlm">ntlm</option>
                                             <option value="kerberos">kerberos</option>
@@ -277,11 +278,11 @@
                                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                     <div>
                                         <label class="form-label">Terminal Width (columns)</label>
-                                        <input type="number" name="default_ssh_width" value="1920" class="form-input">
+                                        <input type="number" name="default_ssh_width" value="1920" class="form-input" aria-label="Default SSH terminal width in columns">
                                     </div>
                                     <div>
                                         <label class="form-label">Terminal Height (rows)</label>
-                                        <input type="number" name="default_ssh_height" value="1080" class="form-input">
+                                        <input type="number" name="default_ssh_height" value="1080" class="form-input" aria-label="Default SSH terminal height in rows">
                                     </div>
                                 </div>
                                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
@@ -305,7 +306,7 @@
                                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                     <div>
                                         <label class="form-label">Color Depth (bits per pixel)</label>
-                                        <input type="number" name="default_vnc_color_depth" value="24" class="form-input">
+                                        <input type="number" name="default_vnc_color_depth" value="24" class="form-input" aria-label="Default VNC color depth">
                                     </div>
                                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                         <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
@@ -651,7 +652,8 @@
                 <!-- Save -->
                 <div class="flex justify-end">
                     <button type="submit"
-                            class="btn btn-primary">
+                            class="btn btn-primary"
+                            hx-disabled-elt="this">
                         Save Settings
                     </button>
                 </div>

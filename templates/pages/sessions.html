@@ -8,7 +8,7 @@
             <p class="text-sm text-muted mt-1"><span id="session-counts"></span></p>
         </div>
         <div class="flex items-center gap-3">
-            <select id="filter-protocol" class="form-input">
+            <select id="filter-protocol" class="form-input" aria-label="Filter by protocol">
                 <option value="">All Protocols</option>
                 <option value="ssh">SSH</option>
                 <option value="rdp">RDP</option>
@@ -17,7 +17,7 @@
                 <option value="spice">SPICE</option>
                 <option value="vdi">VDI</option>
             </select>
-            <select id="filter-status" class="form-input">
+            <select id="filter-status" class="form-input" aria-label="Filter by status">
                 <option value="">All Status</option>
                 <option value="active">Active</option>
                 <option value="pending">Pending</option>
@@ -34,29 +34,29 @@
         </div>
         <div id="new-session-fields" class="hidden space-y-4">
             <div class="form-group"><label class="form-label">Type</label>
-                <select id="session-type" class="form-input"><option value="ssh" selected>SSH</option><option value="rdp">RDP</option><option value="vnc">VNC</option>{% if features.web_sessions %}<option value="web">Web</option>{% endif %}{% if features.vdi %}<option value="vdi">VDI (Docker)</option>{% endif %}</select></div>
+                <select id="session-type" class="form-input" aria-label="Session type"><option value="ssh" selected>SSH</option><option value="rdp">RDP</option><option value="vnc">VNC</option>{% if features.web_sessions %}<option value="web">Web</option>{% endif %}{% if features.vdi %}<option value="vdi">VDI (Docker)</option>{% endif %}</select></div>
             <div id="ssh-fields" class="grid grid-cols-2 gap-4">
-                <div class="form-group"><label class="form-label">Host</label><input type="text" id="hostname" placeholder="192.168.1.1" class="form-input"></div>
-                <div class="form-group"><label class="form-label">Port</label><input type="number" id="port" value="22" class="form-input"></div>
-                <div class="form-group"><label class="form-label">Username</label><input type="text" id="username" class="form-input"></div>
-                <div class="form-group"><label class="form-label">Password</label><input type="password" id="password" class="form-input"></div>
+                <div class="form-group"><label class="form-label">Host</label><input type="text" id="hostname" placeholder="192.168.1.1" class="form-input" aria-label="Host"></div>
+                <div class="form-group"><label class="form-label">Port</label><input type="number" id="port" value="22" class="form-input" aria-label="Port"></div>
+                <div class="form-group"><label class="form-label">Username</label><input type="text" id="username" class="form-input" aria-label="Username"></div>
+                <div class="form-group"><label class="form-label">Password</label><input type="password" id="password" class="form-input" aria-label="Password"></div>
             </div>
             <div id="rdp-fields" class="hidden grid grid-cols-2 gap-4">
-                <div class="form-group"><label class="form-label">Host</label><input type="text" id="rdp-hostname" placeholder="192.168.1.1" class="form-input"></div>
-                <div class="form-group"><label class="form-label">Port</label><input type="number" id="rdp-port" value="3389" class="form-input"></div>
-                <div class="form-group"><label class="form-label">Username</label><input type="text" id="rdp-username" class="form-input"></div>
-                <div class="form-group"><label class="form-label">Password</label><input type="password" id="rdp-password" class="form-input"></div>
+                <div class="form-group"><label class="form-label">Host</label><input type="text" id="rdp-hostname" placeholder="192.168.1.1" class="form-input" aria-label="Host"></div>
+                <div class="form-group"><label class="form-label">Port</label><input type="number" id="rdp-port" value="3389" class="form-input" aria-label="Port"></div>
+                <div class="form-group"><label class="form-label">Username</label><input type="text" id="rdp-username" class="form-input" aria-label="Username"></div>
+                <div class="form-group"><label class="form-label">Password</label><input type="password" id="rdp-password" class="form-input" aria-label="Password"></div>
             </div>
             <div id="vnc-fields" class="hidden grid grid-cols-2 gap-4">
-                <div class="form-group"><label class="form-label">Host</label><input type="text" id="vnc-hostname" placeholder="192.168.1.1" class="form-input"></div>
-                <div class="form-group"><label class="form-label">Port</label><input type="number" id="vnc-port" value="5900" class="form-input"></div>
+                <div class="form-group"><label class="form-label">Host</label><input type="text" id="vnc-hostname" placeholder="192.168.1.1" class="form-input" aria-label="Host"></div>
+                <div class="form-group"><label class="form-label">Port</label><input type="number" id="vnc-port" value="5900" class="form-input" aria-label="Port"></div>
             </div>
-            <div id="web-fields" class="hidden"><div class="form-group"><label class="form-label">URL</label><input type="text" id="url" placeholder="https://example.com" class="form-input"></div></div>
-            <div id="vdi-fields" class="hidden"><div class="form-group"><label class="form-label">Container Image</label><input type="text" id="vdi-image" placeholder="e.g. myregistry/xrdp-desktop:latest" class="form-input"></div></div>
+            <div id="web-fields" class="hidden"><div class="form-group"><label class="form-label">URL</label><input type="text" id="url" placeholder="https://example.com" class="form-input" aria-label="URL"></div></div>
+            <div id="vdi-fields" class="hidden"><div class="form-group"><label class="form-label">Container Image</label><input type="text" id="vdi-image" placeholder="e.g. myregistry/xrdp-desktop:latest" class="form-input" aria-label="Container image"></div></div>
             <div class="form-group">
                 <label class="form-label" for="session-reason">Reason <span class="text-xs text-[var(--text-muted)]">— why are you connecting?</span></label>
                 <div class="grid grid-cols-2 gap-4">
-                    <select id="session-reason-preset" class="form-input">
+                    <select id="session-reason-preset" class="form-input" aria-label="Reason preset">
                         <option value="">Select a reason…</option>
                         <option>Maintenance</option>
                         <option>Password rotation</option>
@@ -75,8 +75,9 @@
             <button type="button" id="connect-btn" class="btn btn-primary">Connect</button>
         </div>
     </div>
+    <div id="sessions-error" class="hidden alert alert-error" role="alert" aria-live="polite"></div>
     <div id="sessions" class="card table-wrapper">
-        <table class="w-full"><thead><tr><th class="w-8"></th><th>User</th><th>Protocol</th><th>Target</th><th>Status</th><th>Duration</th><th>Actions</th></tr></thead><tbody id="session-list"></tbody></table>
+        <table class="w-full"><thead><tr><th>Protocol</th><th>User</th><th>Target</th><th>Status</th><th>Duration</th><th>Actions</th></tr></thead><tbody id="session-list"></tbody></table>
         <p id="session-empty" class="hidden text-center py-12 text-muted text-sm">No sessions yet — open the form above to start an ad-hoc session.</p>
     </div>
 
@@ -91,7 +92,7 @@
         </div>
     </div>
 </div>
-<style>.proto-ssh{background:rgba(34,197,94,.15);color:#4ade80;border-color:rgba(34,197,94,.3)}.proto-rdp{background:rgba(59,130,246,.15);color:#60a5fa;border-color:rgba(59,130,246,.3)}.proto-vnc{background:rgba(249,115,22,.15);color:#fb923c;border-color:rgba(249,115,22,.3)}.proto-spice{background:rgba(168,85,247,.15);color:#c084fc;border-color:rgba(168,85,247,.3)}.proto-web,.proto-vmware{background:rgba(20,184,166,.15);color:#2dd4bf;border-color:rgba(20,184,166,.3)}.proto-proxmox{background:rgba(99,102,241,.15);color:#818cf8;border-color:rgba(99,102,241,.3)}.proto-vdi{background:rgba(236,72,153,.15);color:#f472b6;border-color:rgba(236,72,153,.3)}.status-pill{padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid}.status-active{background:rgba(52,211,153,.12);color:#34d399;border-color:rgba(52,211,153,.3)}.status-pending{background:rgba(240,192,64,.12);color:#f0c040;border-color:rgba(240,192,64,.3)}.status-disconnected{background:rgba(96,165,250,.12);color:#60a5fa;border-color:rgba(96,165,250,.3)}.status-logged_out{background:rgba(233,69,96,.12);color:#f87171;border-color:rgba(233,69,96,.3)}.status-completed,.status-expired,.status-error{background:rgba(107,114,128,.12);color:#9ca3af;border-color:rgba(107,114,128,.3)}</style>
+<style>.status-pill{padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid}.status-active{background:rgba(52,211,153,.12);color:#34d399;border-color:rgba(52,211,153,.3)}.status-pending{background:rgba(240,192,64,.12);color:#f0c040;border-color:rgba(240,192,64,.3)}.status-disconnected{background:rgba(96,165,250,.12);color:#60a5fa;border-color:rgba(96,165,250,.3)}.status-logged_out{background:rgba(233,69,96,.12);color:#f87171;border-color:rgba(233,69,96,.3)}.status-completed,.status-expired,.status-error{background:rgba(107,114,128,.12);color:#9ca3af;border-color:rgba(107,114,128,.3)}.light .status-active{color:#047857;border-color:rgba(4,120,87,.4)}.light .status-pending{color:#b45309;border-color:rgba(180,83,9,.4)}.light .status-disconnected{color:#1d4ed8;border-color:rgba(29,78,216,.4)}.light .status-logged_out{color:#b91c1c;border-color:rgba(185,28,28,.4)}.light .status-completed,.light .status-expired,.light .status-error{color:#475569;border-color:rgba(71,85,105,.4)}</style>
 <script nonce="{{ csp_nonce }}">
 (function() {
     // ── Session open preference ──────────────────────────────────────
@@ -292,7 +293,6 @@
             return '<tr>'
                 + '<td><span class="' + protoClass(proto) + '" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid">' + escapeHtml(proto.toUpperCase()) + '</span></td>'
                 + '<td class="text-sm text-[var(--text-secondary)]">' + escapeHtml(s.created_by || '') + '</td>'
-                + '<td class="text-sm text-[var(--text-secondary)]">' + escapeHtml(proto) + '</td>'
                 + '<td class="text-sm text-[var(--text-secondary)]">' + escapeHtml(target) + (s.entry_display_name ? ' <span class="text-[var(--text-muted)]">\u00B7 ' + escapeHtml(s.entry_display_name) + '</span>' : '') + '</td>'
                 + '<td>' + statusPill(s.status) + '</td>'
                 + '<td class="text-sm text-[var(--text-muted)]">' + durationStr(s.created_at) + '</td>'
@@ -315,11 +315,28 @@
             });
         });
     }
+    var listErrEl = document.getElementById('sessions-error');
+    function showListError(msg) {
+        if (!listErrEl) return;
+        listErrEl.textContent = msg;
+        listErrEl.classList.remove('hidden');
+    }
+    function clearListError() {
+        if (listErrEl) listErrEl.classList.add('hidden');
+    }
     function loadSessions() {
         fetch('/api/sessions' + (isAdmin ? '?all=true' : ''), { headers: apiHeaders(), credentials: 'same-origin' })
-            .then(function(r) { return r.ok ? r.json() : []; })
-            .then(function(sessions) { renderSessions(sessions || []); })
-            .catch(function() {});
+            .then(function(r) {
+                if (r.status === 401) { window.location.href = '/'; return; }
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
+            .then(function(sessions) {
+                if (sessions === undefined) return; // 401 redirect above
+                clearListError();
+                renderSessions(sessions || []);
+            })
+            .catch(function(e) { showListError('Could not load sessions \u2014 ' + (e && e.message ? e.message : 'network error') + '. Retrying automatically.'); });
     }
     function protoClass(p) {
         return { ssh: 'proto-ssh', rdp: 'proto-rdp', vnc: 'proto-vnc', spice: 'proto-spice', web: 'proto-web', vdi: 'proto-vdi', proxmox: 'proto-proxmox' }[p] || '';
@@ -335,7 +352,11 @@
     var recentListEl = document.getElementById('recent-ended-list');
     function loadRecentEnded() {
         fetch('/api/sessions/recent', { headers: apiHeaders(), credentials: 'same-origin' })
-            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(r) {
+                if (r.status === 401) { window.location.href = '/'; return null; }
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
             .then(function(data) {
                 var rows = (data && data.recent) || [];
                 recentEl.classList.toggle('hidden', rows.length === 0);
@@ -356,7 +377,7 @@
                         + '</tr>';
                 }).join('');
             })
-            .catch(function() {});
+            .catch(function(e) { showListError('Could not load recent sessions \u2014 ' + (e && e.message ? e.message : 'network error') + '.'); });
     }
 
     fetch('/api/me', { headers: apiHeaders(), credentials: 'same-origin' })

@@ -36,7 +36,7 @@
             </h2>
             <div>
                 <label class="form-label">Display Name</label>
-                <input type="text" name="site_title" id="branding-site-title" class="form-input" placeholder="persea">
+                <input type="text" name="site_title" id="branding-site-title" class="form-input" placeholder="persea" aria-label="Site display name">
                 <p class="text-xs text-[var(--text-muted)] mt-1">Shown in the sidebar and page titles</p>
             </div>
         </div>
@@ -50,13 +50,13 @@
             <div class="space-y-4">
                 <div>
                     <label class="form-label">Logo URL</label>
-                    <input type="text" name="logo_url" id="branding-logo-url" class="form-input" placeholder="https://example.com/logo.png or /uploads/logo/logo.png">
+                    <input type="text" name="logo_url" id="branding-logo-url" class="form-input" placeholder="https://example.com/logo.png or /uploads/logo/logo.png" aria-label="Logo URL">
                     <p class="text-xs text-[var(--text-muted)] mt-1">URL of the logo image shown in the sidebar</p>
                 </div>
                 <div>
                     <label class="form-label">Upload Logo</label>
                     <div class="flex items-center gap-3">
-                        <input type="file" id="logo-file" accept=".png,.svg,.jpg,.jpeg,.ico" class="hidden">
+                        <input type="file" id="logo-file" accept=".png,.svg,.jpg,.jpeg,.ico" class="hidden" aria-label="Logo upload source" tabindex="-1">
                         <button type="button" id="logo-choose"
                                 class="btn btn-secondary btn-sm">
                             Choose File
@@ -78,8 +78,8 @@
             <div>
                 <label class="form-label">Accent Color</label>
                 <div class="flex items-center gap-3">
-                    <input type="color" name="primary_color" id="branding-primary-color" value="#10b981" class="w-12 h-10 rounded cursor-pointer border border-[var(--border)]">
-                    <input type="text" id="branding-primary-color-hex" class="form-input w-32" placeholder="#10b981" maxlength="7">
+                    <input type="color" name="primary_color" id="branding-primary-color" value="#10b981" class="w-12 h-10 rounded cursor-pointer border border-[var(--border)]" aria-label="Accent color">
+                    <input type="text" id="branding-primary-color-hex" class="form-input w-32" placeholder="#10b981" maxlength="7" aria-label="Accent color hex value">
                 </div>
                 <p class="text-xs text-[var(--text-muted)] mt-1">Used for sidebar active state, buttons, and accents</p>
             </div>
@@ -87,7 +87,7 @@
 
         <!-- Save -->
         <div class="flex justify-end">
-            <button type="submit" class="btn btn-primary">
+            <button type="submit" id="branding-save-btn" class="btn btn-primary">
                 Save Branding
             </button>
         </div>
@@ -271,6 +271,9 @@ document.getElementById('logo-file').addEventListener('change', function() {
 // Save form
 document.getElementById('branding-form').addEventListener('submit', function(e) {
     e.preventDefault();
+    var saveBtn = document.getElementById('branding-save-btn');
+    saveBtn.disabled = true;
+    saveBtn.classList.add('is-loading');
     var payload = {
         site_title: document.getElementById('branding-site-title').value,
         logo_url: document.getElementById('branding-logo-url').value,
@@ -308,6 +311,10 @@ document.getElementById('branding-form').addEventListener('submit', function(e) 
     })
     .catch(function(e) {
         showError('Failed to save branding: ' + (e.message || e));
+    })
+    .finally(function() {
+        saveBtn.disabled = false;
+        saveBtn.classList.remove('is-loading');
     });
 });
 </script>

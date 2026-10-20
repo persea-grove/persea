@@ -1,4 +1,5 @@
 // Modal focus trap and keyboard handling
+// Unused: no template loads this file. Per-page scripts implement their own modal handling (see the player overlay in templates/pages/recordings.html). Old behavior:
 (function() {
   document.addEventListener('keydown', function(e) {
     var modal = document.querySelector('[role="dialog"]:not([aria-hidden="true"])');

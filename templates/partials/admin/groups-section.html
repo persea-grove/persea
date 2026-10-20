@@ -44,11 +44,11 @@
             <div class="space-y-4">
                 <div>
                     <label class="form-label">Name</label>
-                    <input type="text" id="create-group-name" required class="form-input" placeholder="e.g. engineers">
+                    <input type="text" id="create-group-name" required class="form-input" placeholder="e.g. engineers" aria-label="Group name">
                 </div>
                 <div>
                     <label class="form-label">Description</label>
-                    <input type="text" id="create-group-description" class="form-input" placeholder="Optional">
+                    <input type="text" id="create-group-description" class="form-input" placeholder="Optional" aria-label="Group description">
                 </div>
             </div>
             <div class="flex justify-end gap-3 mt-6">
@@ -68,11 +68,11 @@
             <div class="space-y-4">
                 <div>
                     <label class="form-label">Name</label>
-                    <input type="text" id="edit-group-name" required class="form-input">
+                    <input type="text" id="edit-group-name" required class="form-input" aria-label="Group name">
                 </div>
                 <div>
                     <label class="form-label">Description</label>
-                    <input type="text" id="edit-group-description" class="form-input">
+                    <input type="text" id="edit-group-description" class="form-input" aria-label="Group description">
                 </div>
             </div>
             <div class="flex justify-end gap-3 mt-6">
@@ -91,7 +91,7 @@
 
         <label class="form-label">Add mapping</label>
         <div class="flex items-center gap-2 mb-4">
-            <select id="mappings-select" class="form-input flex-1"></select>
+            <select id="mappings-select" class="form-input flex-1" aria-label="Add mapping provider"></select>
             <button data-action="add-mapping" class="btn btn-primary btn-sm whitespace-nowrap">Add</button>
         </div>
         <p id="mappings-elsewhere" class="text-xs text-[var(--text-muted)] mb-3 hidden"></p>

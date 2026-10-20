@@ -82,7 +82,7 @@
         <!-- Recent sessions -->
         <div id="recent-sessions" class="hidden" style="margin-bottom:24px">
             <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-                <p style="font-size:12px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin:0">Recently Connected</p>
+                <h2 style="font-size:12px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin:0">Recently Connected</h2>
                 <span id="recent-count" style="padding:2px 8px;background:var(--bg-input);color:var(--text-muted);font-size:11px;border-radius:12px"></span>
             </div>
             <div id="recent-list" style="display:flex;flex-direction:column;gap:8px"></div>
@@ -91,7 +91,7 @@
         <!-- Active sessions (wired to GET /api/sessions) -->
         <div id="active-sessions" class="hidden" style="margin-bottom:24px">
             <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-                <p style="font-size:12px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin:0">Active Sessions</p>
+                <h2 style="font-size:12px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin:0">Active Sessions</h2>
                 <span id="active-sessions-count" style="padding:2px 8px;background:var(--bg-input);color:var(--text-muted);font-size:11px;border-radius:12px"></span>
             </div>
             <div id="active-sessions-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(280px,100%),1fr));gap:12px"></div>
@@ -106,7 +106,7 @@
             <!-- Left: Folder tree -->
             <div class="conn-sidebar">
                 <div class="conn-sidebar-header">
-                    <p id="folder-tree-label" style="font-size:12px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin:0">Folders</p>
+                    <h2 id="folder-tree-label" style="font-size:12px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin:0">Folders</h2>
                     <select id="scope-filter" class="form-input" style="width:130px" title="Filter the tree by scope">
                         <option value="">All Scopes</option>
                         <option value="shared">Shared</option>
@@ -176,7 +176,7 @@
                     <div id="detail-error" class="hidden" role="alert" aria-live="polite" style="padding:10px 14px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:8px;color:#f87171;font-size:13px;margin-bottom:16px"></div>
                     <div id="detail-details"></div>
                     <div id="detail-sessions" class="hidden" style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px">
-                        <p style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:12px">Active Sessions</p>
+                        <h2 style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:12px">Active Sessions</h2>
                         <div id="detail-sessions-avatars" style="display:flex"></div>
                         <span id="detail-sessions-count" style="font-size:12px;color:var(--text-muted);margin-top:4px"></span>
                     </div>

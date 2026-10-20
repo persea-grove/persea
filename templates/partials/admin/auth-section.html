@@ -38,12 +38,12 @@
             <div class="space-y-4">
                 <div>
                     <label class="form-label">Provider Name</label>
-                    <input type="text" name="name" required class="form-input">
+                    <input type="text" name="name" required class="form-input" aria-label="Provider name">
                 </div>
                 <div>
                     <label class="form-label">Type</label>
                     <select name="type" id="new-provider-type"
-                            class="form-input">
+                            class="form-input" aria-label="Provider type">
                         <option value="ldap">LDAP / Active Directory</option>
                         <option value="saml">SAML 2.0</option>
                         <option value="radius">RADIUS</option>
@@ -56,17 +56,17 @@
                 <!-- LDAP Fields -->
                 <div id="ldap-fields" class="space-y-4">
                     <div><label class="form-label">LDAP Host</label>
-                        <input type="text" name="ldap_host" placeholder="ldap.example.com" class="form-input"></div>
+                        <input type="text" name="ldap_host" placeholder="ldap.example.com" class="form-input" aria-label="LDAP host"></div>
                     <div><label class="form-label">LDAP Port</label>
-                        <input type="number" name="ldap_port" value="389" class="form-input"></div>
+                        <input type="number" name="ldap_port" value="389" class="form-input" aria-label="LDAP port"></div>
                     <div><label class="form-label">Bind DN</label>
-                        <input type="text" name="ldap_bind_dn" placeholder="cn=admin,dc=example,dc=com" class="form-input"></div>
+                        <input type="text" name="ldap_bind_dn" placeholder="cn=admin,dc=example,dc=com" class="form-input" aria-label="LDAP bind DN"></div>
                     <div><label class="form-label">Bind Password</label>
-                        <input type="password" name="ldap_bind_password" class="form-input"></div>
+                        <input type="password" name="ldap_bind_password" class="form-input" aria-label="LDAP bind password"></div>
                     <div><label class="form-label">Search Base DN</label>
-                        <input type="text" name="ldap_search_base" placeholder="ou=users,dc=example,dc=com" class="form-input"></div>
+                        <input type="text" name="ldap_search_base" placeholder="ou=users,dc=example,dc=com" class="form-input" aria-label="LDAP search base DN"></div>
                     <div><label class="form-label">Search Filter</label>
-                        <input type="text" name="ldap_search_filter" placeholder="(uid={0})" class="form-input"></div>
+                        <input type="text" name="ldap_search_filter" placeholder="(uid={0})" class="form-input" aria-label="LDAP search filter"></div>
                     <div class="flex items-center gap-4">
                         <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
                             <input type="checkbox" name="ldap_start_tls" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500"> StartTLS
@@ -80,25 +80,25 @@
                 <!-- SAML Fields -->
                 <div id="saml-fields" class="hidden space-y-4">
                     <div><label class="form-label">IdP Metadata URL</label>
-                        <input type="url" name="saml_metadata_url" placeholder="https://idp.example.com/metadata" class="form-input"></div>
+                        <input type="url" name="saml_metadata_url" placeholder="https://idp.example.com/metadata" class="form-input" aria-label="IdP metadata URL"></div>
                     <div><label class="form-label">Entity ID</label>
-                        <input type="text" name="saml_entity_id" placeholder="https://persea.example.com/saml" class="form-input"></div>
+                        <input type="text" name="saml_entity_id" placeholder="https://persea.example.com/saml" class="form-input" aria-label="SAML entity ID"></div>
                     <div><label class="form-label">ACS URL</label>
-                        <input type="url" name="saml_acs_url" placeholder="https://persea.example.com/auth/saml/acs" class="form-input"></div>
+                        <input type="url" name="saml_acs_url" placeholder="https://persea.example.com/auth/saml/acs" class="form-input" aria-label="ACS URL"></div>
                     <div><label class="form-label">SLO URL</label>
-                        <input type="url" name="saml_slo_url" placeholder="https://persea.example.com/auth/saml/slo" class="form-input"></div>
+                        <input type="url" name="saml_slo_url" placeholder="https://persea.example.com/auth/saml/slo" class="form-input" aria-label="SLO URL"></div>
                 </div>
 
                 <!-- RADIUS Fields -->
                 <div id="radius-fields" class="hidden space-y-4">
                     <div><label class="form-label">RADIUS Host</label>
-                        <input type="text" name="radius_host" placeholder="radius.example.com" class="form-input"></div>
+                        <input type="text" name="radius_host" placeholder="radius.example.com" class="form-input" aria-label="RADIUS host"></div>
                     <div><label class="form-label">RADIUS Port</label>
-                        <input type="number" name="radius_port" value="1812" class="form-input"></div>
+                        <input type="number" name="radius_port" value="1812" class="form-input" aria-label="RADIUS port"></div>
                     <div><label class="form-label">Shared Secret</label>
-                        <input type="password" name="radius_secret" class="form-input"></div>
+                        <input type="password" name="radius_secret" class="form-input" aria-label="RADIUS shared secret"></div>
                     <div><label class="form-label">Timeout (seconds)</label>
-                        <input type="number" name="radius_timeout" value="10" class="form-input"></div>
+                        <input type="number" name="radius_timeout" value="10" class="form-input" aria-label="RADIUS timeout in seconds"></div>
                 </div>
 
                 <!-- Database Fields (minimal) -->
@@ -109,18 +109,18 @@
                 <!-- TOTP Fields -->
                 <div id="totp-fields" class="hidden space-y-4">
                     <div><label class="form-label">Issuer</label>
-                        <input type="text" name="totp_issuer" placeholder="persea" class="form-input"></div>
+                        <input type="text" name="totp_issuer" placeholder="persea" class="form-input" aria-label="TOTP issuer"></div>
                     <div><label class="form-label">Digits</label>
-                        <select name="totp_digits" class="form-input">
+                        <select name="totp_digits" class="form-input" aria-label="TOTP digits">
                             <option value="6" selected>6</option>
                             <option value="8">8</option>
                         </select>
                     </div>
                     <div><label class="form-label">Period (seconds)</label>
-                        <input type="number" name="totp_period" value="30" class="form-input"></div>
+                        <input type="number" name="totp_period" value="30" class="form-input" aria-label="TOTP period in seconds"></div>
                     <div>
                         <label class="form-label">Enforcement</label>
-                        <select name="totp_enforcement" class="form-input">
+                        <select name="totp_enforcement" class="form-input" aria-label="TOTP enforcement">
                             <option value="optional">Optional</option>
                             <option value="required">Required</option>
                         </select>
@@ -130,15 +130,15 @@
                 <!-- OIDC Fields -->
                 <div id="oidc-fields" class="hidden space-y-4">
                     <div><label class="form-label">Issuer URL</label>
-                        <input type="url" name="oidc_issuer_url" placeholder="https://auth.example.com/application/o/persea/" class="form-input"></div>
+                        <input type="url" name="oidc_issuer_url" placeholder="https://auth.example.com/application/o/persea/" class="form-input" aria-label="OIDC issuer URL"></div>
                     <div><label class="form-label">Client ID</label>
-                        <input type="text" name="oidc_client_id" placeholder="persea" class="form-input"></div>
+                        <input type="text" name="oidc_client_id" placeholder="persea" class="form-input" aria-label="OIDC client ID"></div>
                     <div><label class="form-label">Client Secret</label>
-                        <input type="password" name="oidc_client_secret" class="form-input"></div>
+                        <input type="password" name="oidc_client_secret" class="form-input" aria-label="OIDC client secret"></div>
                     <div><label class="form-label">Redirect URI</label>
-                        <input type="url" name="oidc_redirect_uri" placeholder="https://persea.example.com/auth/callback" class="form-input"></div>
+                        <input type="url" name="oidc_redirect_uri" placeholder="https://persea.example.com/auth/callback" class="form-input" aria-label="OIDC redirect URI"></div>
                     <div><label class="form-label">Groups Claim</label>
-                        <input type="text" name="oidc_groups_claim" placeholder="groups" class="form-input"></div>
+                        <input type="text" name="oidc_groups_claim" placeholder="groups" class="form-input" aria-label="OIDC groups claim"></div>
                 </div>
             </div>
             <div class="flex justify-end gap-3 mt-6">
@@ -259,15 +259,17 @@ function buildConfigForm(config) {
         if (!config.hasOwnProperty(key)) continue;
         var val = config[key];
         var isSecret = SECRET_CONFIG_KEYS.indexOf(key) !== -1;
-        html += '<div><label class="form-label">' + key.replace(/_/g, ' ') + '</label>';
+        var labelText = key.replace(/_/g, ' ');
+        var labelAttr = ' aria-label="' + escapeAttr(labelText) + '"';
+        html += '<div><label class="form-label">' + labelText + '</label>';
         if (typeof val === 'boolean') {
-            html += '<input type="checkbox" name="' + escapeAttr(key) + '" ' + (val ? 'checked' : '') + ' class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">';
+            html += '<input type="checkbox" aria-label="' + escapeAttr(labelText) + '" name="' + escapeAttr(key) + '" ' + (val ? 'checked' : '') + ' class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">';
         } else if (typeof val === 'number') {
-            html += '<input type="number" name="' + escapeAttr(key) + '" value="' + val + '" class="form-input">';
+            html += '<input type="number"' + labelAttr + ' name="' + escapeAttr(key) + '" value="' + val + '" class="form-input">';
         } else if (isSecret) {
-            html += '<input type="password" name="' + escapeAttr(key) + '" value="" placeholder="leave blank to keep" autocomplete="new-password" class="form-input">';
+            html += '<input type="password"' + labelAttr + ' name="' + escapeAttr(key) + '" value="" placeholder="leave blank to keep" autocomplete="new-password" class="form-input">';
         } else {
-            html += '<input type="text" name="' + escapeAttr(key) + '" value="' + escapeAttr(val || '') + '" class="form-input">';
+            html += '<input type="text"' + labelAttr + ' name="' + escapeAttr(key) + '" value="' + escapeAttr(val || '') + '" class="form-input">';
         }
         html += '</div>';
     }
