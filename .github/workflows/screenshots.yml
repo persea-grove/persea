@@ -39,7 +39,7 @@ jobs:
         with:
           components: rustfmt, clippy
           rustflags: ""
-          build-warnings: "ignore"  # v2 default is deny; the baseline warnings live in tests (persea-grove/persea#343)
+          build-warnings: "allow"  # v2 default is deny; the baseline warnings live in tests (persea-grove/persea#343)
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
