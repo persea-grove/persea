@@ -48,6 +48,7 @@ jobs:
         with:
           components: rustfmt, clippy
           rustflags: ""
+          build-warnings: "ignore"  # v2 default is deny; the baseline warnings live in tests (persea-grove/persea#343)
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo check
 
@@ -59,6 +60,7 @@ jobs:
         with:
           components: rustfmt, clippy
           rustflags: ""
+          build-warnings: "ignore"  # v2 default is deny; the baseline warnings live in tests (persea-grove/persea#343)
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo fmt --check
 
@@ -70,6 +72,7 @@ jobs:
         with:
           components: rustfmt, clippy
           rustflags: ""
+          build-warnings: "ignore"  # v2 default is deny; the baseline warnings live in tests (persea-grove/persea#343)
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       # Deliberate visibility lints (missing_docs, clippy::needless_pass_by_value)
       # stay warnings; the curated set below denies the default clippy::all
@@ -85,6 +88,7 @@ jobs:
         with:
           components: rustfmt, clippy
           rustflags: ""
+          build-warnings: "ignore"  # v2 default is deny; the baseline warnings live in tests (persea-grove/persea#343)
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo test
 
@@ -96,6 +100,7 @@ jobs:
         with:
           components: rustfmt, clippy
           rustflags: ""
+          build-warnings: "ignore"  # v2 default is deny; the baseline warnings live in tests (persea-grove/persea#343)
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       # cargo-audit is a prebuilt-free binary; cache the installed binary so
       # it is compiled once per version instead of on every run. Bump the key
@@ -121,6 +126,7 @@ jobs:
         with:
           components: rustfmt, clippy
           rustflags: ""
+          build-warnings: "ignore"  # v2 default is deny; the baseline warnings live in tests (persea-grove/persea#343)
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo build
       - name: Start persea and verify /api/health
@@ -183,6 +189,7 @@ jobs:
         with:
           components: rustfmt, clippy
           rustflags: ""
+          build-warnings: "ignore"  # v2 default is deny; the baseline warnings live in tests (persea-grove/persea#343)
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo build
       - name: Start persea with ${{ matrix.backend }} and verify the pool is actually reachable
@@ -287,6 +294,7 @@ jobs:
         with:
           components: rustfmt, clippy
           rustflags: ""
+          build-warnings: "ignore"  # v2 default is deny; the baseline warnings live in tests (persea-grove/persea#343)
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Seed LDAP test data
         run: |
@@ -320,6 +328,7 @@ jobs:
         with:
           components: rustfmt, clippy
           rustflags: ""
+          build-warnings: "ignore"  # v2 default is deny; the baseline warnings live in tests (persea-grove/persea#343)
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Build persea (release)
         run: cargo build --release
