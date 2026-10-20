@@ -6,6 +6,7 @@ use crate::tunnel;
 use chrono::{DateTime, Utc};
 use ipnetwork::IpNetwork;
 use std::net::ToSocketAddrs;
+use std::path::PathBuf;
 use url::Url;
 use uuid::Uuid;
 
@@ -252,46 +253,72 @@ async fn count_live_sessions(
     count
 }
 
+/// Count the live (Pending|Active) sessions created by `identity`,
+/// mirroring [`count_live_sessions`] for the per-user cap. Only called
+/// from inside the sessions-map write lock, which is what makes the
+/// per-user cap check race-free (persea#340).
+async fn count_user_live_sessions(
+    sessions: &std::collections::HashMap<Uuid, std::sync::Arc<tokio::sync::Mutex<Session>>>,
+    identity: &str,
+) -> usize {
+    let mut count = 0usize;
+    for session in sessions.values() {
+        let s = session.lock().await;
+        if s.created_by == identity
+            && matches!(s.status, SessionStatus::Pending | SessionStatus::Active)
+        {
+            count += 1;
+        }
+    }
+    count
+}
+
+/// Owns a per-session RDP drive directory on the create path (persea#340
+/// P2): between directory creation and `Session` registration there are
+/// several `?` exits (tunnel setup, guacd handshake, cap checks). Without
+/// this guard the directory leaks on disk for every failed create. On the
+/// success path it is disarmed explicitly right after the session is
+/// registered, and the live `Session` owns cleanup via the normal
+/// teardown path (`cleanup_browser`).
+///
+/// A failed create removes the directory immediately regardless of
+/// `cleanup_on_close` retention: a session that never existed must not
+/// leave residue, and retention only matters for sessions that did run.
+struct DriveDirLeakGuard(Option<PathBuf>);
+
+impl Drop for DriveDirLeakGuard {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            // Best effort: at failure time the dir holds at most guacd's
+            // fresh Download skeleton, so a sync removal is quick.
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+}
+
+impl DriveDirLeakGuard {
+    fn disarm(mut self) {
+        self.0 = None;
+    }
+}
+
 impl SessionManager {
     /// Create a new session: connect to guacd, perform handshake, return session info.
     /// `client_ip` is the connecting client's IP (from the HTTP layer,
     /// already X-Forwarded-For aware); RDP sessions use it for the
     /// `client-name` parameter.
+    ///
+    /// Both session caps (per-user and global) are enforced inside the
+    /// write-lock critical section at insert time, so two concurrent
+    /// creates for the same identity cannot both race past the check
+    /// (persea#340). `created_by` carries the caller's stable identity
+    /// (email / API-key name; see api::sessions::create_session).
     pub async fn create_session(
         self: &std::sync::Arc<Self>,
         req: CreateSessionRequest,
         created_by: String,
         client_ip: Option<String>,
     ) -> Result<SessionInfo, SessionError> {
-        // Enforce the per-user session limit (only counts Pending|Active
-        // sessions). The global limit is enforced under the sessions map
-        // write lock at insert time, so concurrent creates cannot race
-        // past it. `created_by` carries the caller's stable identity
-        // (email / API-key name; see api::sessions::create_session), so
-        // the quota keys on the identity rather than a display name.
-        {
-            let sessions = self.sessions.read().await;
-            let max_per_user = self.config.max_sessions_per_user;
-
-            if max_per_user > 0 {
-                let mut user_count = 0usize;
-                for session in sessions.values() {
-                    let s = session.lock().await;
-                    if s.created_by == created_by
-                        && matches!(s.status, SessionStatus::Pending | SessionStatus::Active)
-                    {
-                        user_count += 1;
-                    }
-                }
-                if user_count >= max_per_user {
-                    return Err(SessionError::ValidationError(format!(
-                        "maximum sessions per user reached ({})",
-                        max_per_user
-                    )));
-                }
-            }
-        }
-
         // Reject new sessions during graceful shutdown
         if self.is_shutting_down() {
             return Err(SessionError::ValidationError(
@@ -1244,6 +1271,14 @@ impl SessionManager {
             }
         };
 
+        // Owns the RDP drive dir until the session is registered: any `?`
+        // from here to the insert below now cleans the directory instead
+        // of leaking it on disk (persea#340 P2). Browser sessions have
+        // their own Drop-based cleanup (src/browser.rs). The guard starts
+        // armed with the just-created directory, or as a no-op for
+        // session types without one.
+        let drive_dir_guard = DriveDirLeakGuard(session_drive_path.clone());
+
         // Set up SSH tunnel chain if jump hosts are configured.
         // For SSH/RDP/VNC: overrides hostname/port in conn_params so guacd
         // connects to the local tunnel listener instead of the real target.
@@ -1571,20 +1606,33 @@ impl SessionManager {
             auto_size,
             last_activity: std::sync::atomic::AtomicI64::new(Utc::now().timestamp()),
             source_ip: client_ip.clone(),
-            user_id: Some(created_by),
+            user_id: Some(created_by.clone()),
         };
 
         let info = session.info();
         self.publish_session_started(&session);
         let session = tokio::sync::Mutex::new(session);
 
-        // Enforce the global session cap inside the same write-lock
-        // critical section as the insert: a check-then-insert elsewhere
-        // races with concurrent creates and lets the map exceed the cap.
+        // Enforce both session caps inside the same write-lock critical
+        // section as the insert: a check-then-insert elsewhere races with
+        // concurrent creates and lets the map exceed a cap (persea#340).
         // Only Pending|Active sessions count — terminal states linger in
         // the map until the cleanup reaper removes them.
         {
             let mut sessions = self.sessions.write().await;
+
+            // Per-user cap: the same pattern as the global cap, keyed on
+            // the caller's stable identity (`created_by`).
+            let max_per_user = self.config.max_sessions_per_user;
+            if max_per_user > 0
+                && count_user_live_sessions(&sessions, &created_by).await >= max_per_user
+            {
+                return Err(SessionError::ValidationError(format!(
+                    "maximum sessions per user reached ({})",
+                    max_per_user
+                )));
+            }
+
             let max_global = self.config.max_sessions;
             if max_global > 0 && count_live_sessions(&sessions).await >= max_global {
                 return Err(SessionError::ValidationError(format!(
@@ -1594,6 +1642,10 @@ impl SessionManager {
             }
             sessions.insert(session_id, std::sync::Arc::new(session));
         }
+
+        // The session owns the drive dir now; normal teardown
+        // (`cleanup_browser`) handles it from here.
+        drive_dir_guard.disarm();
 
         crate::metrics::session_total_inc();
 

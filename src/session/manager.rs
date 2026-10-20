@@ -1738,15 +1738,6 @@ impl SessionManager {
         count
     }
 
-    /// Returns true if `user_id` has fewer than `limit` active/pending sessions.
-    /// A limit of 0 means unlimited.
-    pub async fn check_concurrent_limit(&self, user_id: &str, limit: usize) -> bool {
-        if limit == 0 {
-            return true;
-        }
-        self.get_user_session_count(user_id).await < limit
-    }
-
     /// Persist session metadata to the session_history table. This is an
     /// audit-trail write — credentials are never stored.
     pub fn save_session_metadata(&self, session: &Session) {

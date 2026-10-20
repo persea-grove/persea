@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tokio::net::TcpStream;
 use tokio::process::{Child, Command};
 use tokio::time::{timeout, Duration};
@@ -47,7 +47,16 @@ impl RangeAllocator {
     }
 }
 
-/// Handles for the spawned Xvnc and Chromium processes.
+/// Handles for the spawned Xvnc and Chromium processes, plus the shared
+/// allocation slots they consume.
+///
+/// Dropping a `BrowserSession` always tears everything down (see the
+/// [`Drop`] impl): the process handles carry
+/// [`tokio::process::Command::kill_on_drop`], so dropping without an
+/// awaited [`BrowserManager::kill`] still SIGKILLs Xvnc and Chromium, and
+/// this `Drop` frees the display slot, CDP port, and profile dir. That is
+/// what makes the create path safe: an early `?` between spawn and the
+/// `Session` registration cannot leak any of these resources.
 pub struct BrowserSession {
     /// X display number allocated from the pool for this session.
     pub display: u32,
@@ -61,12 +70,39 @@ pub struct BrowserSession {
     pub profile_dir: PathBuf,
     /// CDP port allocated for this session (if login script requested).
     pub cdp_port: Option<u16>,
+    /// The display allocator this session drew `display` from (shared with
+    /// the manager). Released again in `Drop` so an early `?` on the create
+    /// path cannot permanently consume the slot.
+    display_allocator: Arc<RangeAllocator>,
+    /// The CDP allocator this session drew `cdp_port` from. Released again
+    /// in `Drop`.
+    cdp_allocator: Arc<RangeAllocator>,
+}
+
+impl Drop for BrowserSession {
+    fn drop(&mut self) {
+        // Process death comes from the child handles' kill_on_drop config:
+        // dropping them SIGKILLs Xvnc and Chromium and the runtime reaps
+        // the orphans. Here we free the allocation slots and the profile
+        // dir, so no `?` between spawn and Session registration can leak a
+        // display slot, a CDP port, or disk. The async teardown path
+        // ([`BrowserManager::kill`]) already released both before the
+        // final drop; release is idempotent so the double pass is a no-op.
+        self.display_allocator.release(self.display);
+        if let Some(port) = self.cdp_port.take() {
+            self.cdp_allocator.release(port as u32);
+        }
+        let profile_dir = self.profile_dir.clone();
+        std::thread::spawn(move || {
+            let _ = std::fs::remove_dir_all(&profile_dir);
+        });
+    }
 }
 
 /// Manages spawning and killing browser sessions.
 pub struct BrowserManager {
-    display_allocator: RangeAllocator,
-    cdp_allocator: RangeAllocator,
+    display_allocator: Arc<RangeAllocator>,
+    cdp_allocator: Arc<RangeAllocator>,
     xvnc_path: String,
     chromium_path: String,
     login_scripts_dir: PathBuf,
@@ -88,11 +124,14 @@ impl BrowserManager {
         login_script_timeout_secs: u64,
     ) -> Self {
         Self {
-            display_allocator: RangeAllocator::new(display_range_start, display_range_end),
-            cdp_allocator: RangeAllocator::new(
+            display_allocator: Arc::new(RangeAllocator::new(
+                display_range_start,
+                display_range_end,
+            )),
+            cdp_allocator: Arc::new(RangeAllocator::new(
                 cdp_port_range_start as u32,
                 cdp_port_range_end as u32,
-            ),
+            )),
             xvnc_path,
             chromium_path,
             login_scripts_dir,
@@ -235,6 +274,9 @@ impl BrowserManager {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())
+            // Dropped handles without an awaited kill (create-path `?`,
+            // persea#340) must still kill the process; the runtime reaps it.
+            .kill_on_drop(true)
             .spawn()
             .map_err(|e| {
                 self.display_allocator.release(display_num);
@@ -387,6 +429,8 @@ impl BrowserManager {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())
+            // Same kill-on-drop guarantee as Xvnc above (persea#340).
+            .kill_on_drop(true)
             .spawn();
 
         let mut chromium_child = match chromium_result {
@@ -467,6 +511,8 @@ impl BrowserManager {
             chromium_child,
             profile_dir,
             cdp_port,
+            display_allocator: Arc::clone(&self.display_allocator),
+            cdp_allocator: Arc::clone(&self.cdp_allocator),
         })
     }
 
@@ -967,5 +1013,135 @@ mod tests {
         let snippet = truncate_for_log(&long);
         assert_eq!(snippet.len(), 200 + "(...truncated)".len());
         assert!(snippet.ends_with("...(truncated)"));
+    }
+
+    #[cfg(unix)]
+    fn make_test_browsers() -> (Child, Child) {
+        (
+            // Same kill_on_drop config the real spawn path uses (#340).
+            Command::new("/bin/sleep")
+                .arg("60")
+                .kill_on_drop(true)
+                .spawn()
+                .expect("spawn test xvnc stand-in"),
+            Command::new("/bin/sleep")
+                .arg("60")
+                .kill_on_drop(true)
+                .spawn()
+                .expect("spawn test chromium stand-in"),
+        )
+    }
+
+    #[cfg(unix)]
+    fn proc_alive(pid: u32) -> bool {
+        std::path::Path::new(&format!("/proc/{pid}")).exists()
+    }
+
+    #[cfg(unix)]
+    async fn wait_until_dead(pid: u32) {
+        for _ in 0..50 {
+            if !proc_alive(pid) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("process {pid} still alive after BrowserSession drop");
+    }
+
+    /// persea#340: dropping a BrowserSession without ever calling
+    /// `BrowserManager::kill` (the create-path `?` case) must free the
+    /// display slot and CDP port immediately, kill both children via
+    /// kill_on_drop, and clean up the profile dir.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn browser_session_drop_releases_allocations_kills_processes() {
+        let mgr = BrowserManager::new(
+            "/bin/sleep".into(),
+            "/bin/sleep".into(),
+            120,
+            122,
+            10100,
+            10102,
+            std::env::temp_dir(),
+            5,
+        );
+        let (xvnc_child, chromium_child) = make_test_browsers();
+        let xvnc_pid = xvnc_child.id().expect("xvnc pid");
+        let chromium_pid = chromium_child.id().expect("chromium pid");
+        let display = mgr.display_allocator.allocate().expect("display slot");
+        let cdp = mgr.cdp_allocator.allocate().expect("cdp port") as u16;
+        let profile_dir =
+            std::env::temp_dir().join(format!("persea-test-profile-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&profile_dir).unwrap();
+
+        drop(BrowserSession {
+            display,
+            vnc_port: 5900 + display as u16,
+            xvnc_child,
+            chromium_child,
+            profile_dir: profile_dir.clone(),
+            cdp_port: Some(cdp),
+            display_allocator: Arc::clone(&mgr.display_allocator),
+            cdp_allocator: Arc::clone(&mgr.cdp_allocator),
+        });
+
+        // Slots are free immediately (no re-allocation failure).
+        assert_eq!(mgr.display_allocator.allocate(), Some(display));
+        assert_eq!(mgr.cdp_allocator.allocate(), Some(cdp as u32));
+
+        // Both children were killed on drop.
+        wait_until_dead(xvnc_pid).await;
+        wait_until_dead(chromium_pid).await;
+
+        // Profile dir removal runs on a detached thread; poll for it.
+        for _ in 0..50 {
+            if !profile_dir.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(!profile_dir.exists(), "profile dir must be removed on drop");
+    }
+
+    /// The async teardown path (`BrowserManager::kill`) followed by the
+    /// normal drop must not double-release into a broken state: the slots
+    /// stay free and no panic occurs.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn kill_then_drop_is_idempotent() {
+        let mgr = BrowserManager::new(
+            "/bin/sleep".into(),
+            "/bin/sleep".into(),
+            130,
+            132,
+            10200,
+            10202,
+            std::env::temp_dir(),
+            5,
+        );
+        let (xvnc_child, chromium_child) = make_test_browsers();
+        let display = mgr.display_allocator.allocate().expect("display slot");
+        let cdp = mgr.cdp_allocator.allocate().expect("cdp port") as u16;
+        let profile_dir =
+            std::env::temp_dir().join(format!("persea-test-profile-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&profile_dir).unwrap();
+
+        let mut session = BrowserSession {
+            display,
+            vnc_port: 5900 + display as u16,
+            xvnc_child,
+            chromium_child,
+            profile_dir: profile_dir.clone(),
+            cdp_port: Some(cdp),
+            display_allocator: Arc::clone(&mgr.display_allocator),
+            cdp_allocator: Arc::clone(&mgr.cdp_allocator),
+        };
+        mgr.kill(&mut session).await;
+        drop(session);
+
+        // Both reclaimed slots come back exactly once (no phantom release
+        // re-added a number that was already free).
+        assert_eq!(mgr.display_allocator.allocate(), Some(display));
+        assert_eq!(mgr.cdp_allocator.allocate(), Some(cdp as u32));
     }
 }
