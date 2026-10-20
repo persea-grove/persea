@@ -2,12 +2,22 @@ use axum::extract::Form;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Extension;
 use serde::Deserialize;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::api::SiteTitle;
 use crate::config::Config;
 use crate::db_pool::{DbKind, DbPool};
 use crate::templates::SetupTemplate;
 use crate::CspNonce;
+
+/// Process-wide first-admin claim for POST /setup. The wizard is shown
+/// whenever the store has zero users, so two concurrent submissions can both
+/// observe that state; the atomic swap lets exactly one of them proceed to
+/// create the admin, and the other gets a 409. Claimed once per process
+/// (in-memory by design, like the SAML replay cache): a restart re-arms the
+/// wizard, a store that already has users is gated by `needs_setup()` above,
+/// and a failed creation resets it so the first attempt can be retried.
+static FIRST_ADMIN_CLAIMED: AtomicBool = AtomicBool::new(false);
 
 /// Form body of the setup wizard (POST /setup).
 #[derive(Debug, Deserialize)]
@@ -365,11 +375,24 @@ pub async fn setup_submit(
     // Create admin user in the ACTIVE store: the configured backend when a
     // pool is installed (db_url), otherwise the legacy SQLite file.
     //
-    // First-admin claim: the wizard is shown while the store has zero
-    // users, and two concurrent submissions can both pass that check. The
-    // first to commit wins; a second submission creates a second admin
-    // (names are unique, emails are not). Acceptable for a bootstrap
-    // wizard — operators should complete setup exactly once.
+    // First-admin claim: two concurrent submissions can both pass the
+    // zero-users check at the top of the handler, so the insert is gated by
+    // a process-wide atomic claim. Exactly one in-flight submission wins;
+    // the loser gets a 409 (persea-grove/persea#345). Reset on failure so a
+    // broken first attempt can be retried.
+    if FIRST_ADMIN_CLAIMED.swap(true, Ordering::SeqCst) {
+        let mut resp = error_response(
+            &site_title.0,
+            "Setup is already in progress: another request is creating the first admin \
+             account. Refresh this page once it completes."
+                .to_string(),
+            &form,
+            min_len,
+            &nonce.0,
+        );
+        *resp.status_mut() = axum::http::StatusCode::CONFLICT;
+        return resp;
+    }
     if let Err(e) = crate::db::create_user_with_password(
         &database,
         &form.admin_email,
@@ -378,6 +401,7 @@ pub async fn setup_submit(
         "admin",
         "database",
     ) {
+        FIRST_ADMIN_CLAIMED.store(false, Ordering::SeqCst);
         return error_response(
             &site_title.0,
             format!("Failed to create admin user: {}", e),
