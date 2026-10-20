@@ -1198,15 +1198,20 @@ async fn security_headers(
         "Permissions-Policy",
         "camera=(), microphone=(), geolocation=()".parse().unwrap(),
     );
+    // WebSocket connections (Guacamole tunnel at /ws/{session_id}) are
+    // same-origin, covered by 'self' (CSP3 matches the ws/wss scheme
+    // upgrades of the page origin), so the bare `ws:`/`wss:` wildcards
+    // dropped here never carried a legitimate cross-origin need: they let
+    // injected script talk to any WebSocket endpoint on the internet.
     // The desktop shell (Tauri) talks to this instance over remote IPC; its
     // transports are only reachable when the page CSP permits them
     // (tauri#8476: IPC silently fails otherwise). Added ONLY when the
     // operator enabled the bridge via [desktop] allow_bridge = true —
     // otherwise the header stays byte-identical to the pre-desktop build.
     let connect_src = if crate::config::allow_bridge_enabled() {
-        "connect-src 'self' wss: ws: tauri://localhost http://ipc.localhost"
+        "connect-src 'self' tauri://localhost http://ipc.localhost"
     } else {
-        "connect-src 'self' wss: ws:"
+        "connect-src 'self'"
     };
     headers.insert(
         "Content-Security-Policy",
