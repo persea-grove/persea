@@ -186,6 +186,18 @@ impl PveBroker {
     /// Build an HTTP client for PVE API calls. PVE ships a self-signed cluster
     /// cert by default, so certificate verification follows `verify_tls`.
     fn http_client(&self) -> Result<reqwest::Client, PveError> {
+        if !self.verify_tls {
+            // Warn once per process: an operator running with the insecure
+            // opt-out must see it in the logs until it is fixed
+            // (persea-grove/persea#345).
+            static INSECURE_WARNED: std::sync::Once = std::sync::Once::new();
+            INSECURE_WARNED.call_once(|| {
+                tracing::warn!(
+                    base_url = %self.base_url,
+                    "PVE TLS certificate verification is DISABLED (insecure opt-out): API traffic to this Proxmox host is vulnerable to machine-in-the-middle attacks. Enable 'Verify TLS certificate' on the connection and trust your cluster CA."
+                );
+            });
+        }
         reqwest::Client::builder()
             .danger_accept_invalid_certs(!self.verify_tls)
             .connect_timeout(Duration::from_secs(10))
