@@ -13121,3 +13121,43 @@ mod personal_folder_tests {
         assert_ne!(bob_folders[0].id, alice_folder);
     }
 }
+
+#[cfg(test)]
+mod pool_tx_tests {
+    use super::*;
+
+    /// A failed statement mid-sequence rolls back the earlier ones
+    /// (persea#342: delete-then-insert must not leave partial state).
+    #[tokio::test]
+    async fn pool_tx_rolls_back_on_mid_sequence_error() -> rusqlite::Result<()> {
+        use sqlx::sqlite::SqlitePoolOptions;
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open sqlite pool");
+        sqlx::query("CREATE TABLE tx_probe (id INTEGER PRIMARY KEY)")
+            .execute(&pool)
+            .await
+            .expect("create table");
+        let db = DbPool::SQLite(pool.clone());
+
+        let result: rusqlite::Result<()> = pool_tx!(&db, |tx| async move {
+            tx.exec("INSERT INTO tx_probe (id) VALUES (?)", &[Arg::I64(1)])
+                .await?;
+            // Duplicate primary key: the whole sequence must roll back.
+            tx.exec("INSERT INTO tx_probe (id) VALUES (?)", &[Arg::I64(1)])
+                .await?;
+            Ok(())
+        });
+
+        assert!(result.is_err(), "duplicate primary key must fail");
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tx_probe")
+            .fetch_one(&pool)
+            .await
+            .expect("count rows");
+        assert_eq!(count, 0, "first insert must roll back");
+        Ok(())
+    }
+}
