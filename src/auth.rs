@@ -317,27 +317,58 @@ pub fn compute_effective_role(user_role: &str, max_role: &Option<String>) -> Str
     }
 }
 
-/// Extract the real client IP, honouring X-Forwarded-For when the socket
-/// address belongs to a trusted proxy CIDR.
+/// Extract the real client IP.
+///
+/// Default is the socket peer address. `X-Forwarded-For` is considered only
+/// when the socket peer itself belongs to a trusted proxy CIDR. Inside the
+/// header, entries are scanned right-to-left: each proxy appends the address
+/// it received, so the rightmost entry is the only one the immediate peer
+/// vouches for. The walk skips trusted-proxy addresses and returns the first
+/// untrusted entry; if every entry is a trusted proxy, the leftmost (the
+/// origin, vouched for by that proxy) wins. A malformed entry ends the walk
+/// and falls back to the socket peer address, so client-forged padding can
+/// never be promoted to the effective client IP.
 pub fn client_ip(headers: &HeaderMap, socket_addr: IpAddr, trusted_proxies: &[String]) -> IpAddr {
-    if !trusted_proxies.is_empty() {
-        let networks: Vec<IpNetwork> = trusted_proxies
-            .iter()
-            .filter_map(|s| s.parse::<IpNetwork>().ok())
-            .collect();
-
-        if networks.iter().any(|net| net.contains(socket_addr)) {
-            if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-                // First IP in X-Forwarded-For is the original client
-                if let Some(first) = xff.split(',').next() {
-                    if let Ok(ip) = first.trim().parse::<IpAddr>() {
-                        return ip;
-                    }
+    if trusted_proxies.is_empty() {
+        return socket_addr;
+    }
+    let networks: Vec<IpNetwork> = trusted_proxies
+        .iter()
+        .filter_map(|s| s.parse::<IpNetwork>().ok())
+        .collect();
+    let is_trusted = |ip: &IpAddr| networks.iter().any(|net| net.contains(*ip));
+    // Header values are only consulted when the wire-level peer is itself a
+    // trusted proxy; any other peer's headers are attacker-controlled.
+    if !is_trusted(&socket_addr) {
+        return socket_addr;
+    }
+    // Repeated X-Forwarded-For header lines are equivalent to one
+    // comma-joined header (RFC 7230 §3.2.2), so join them and the walk sees
+    // the whole chain in order.
+    let chain: String = headers
+        .get_all("x-forwarded-for")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if chain.is_empty() {
+        return socket_addr;
+    }
+    let mut leftmost: Option<IpAddr> = None;
+    for entry in chain.split(',').rev() {
+        match entry.trim().parse::<IpAddr>() {
+            Ok(ip) => {
+                if !is_trusted(&ip) {
+                    return ip;
                 }
+                leftmost = Some(ip);
             }
+            // Malformed entry: the chain is broken and nothing to its left is
+            // vouched for either, so fall back to the peer address.
+            Err(_) => return socket_addr,
         }
     }
-    socket_addr
+    leftmost.unwrap_or(socket_addr)
 }
 
 /// Extract a cookie value from a HeaderMap.
@@ -824,6 +855,55 @@ mod tests {
         let proxies = vec!["10.0.0.0/8".into()];
         let ip = client_ip(&headers, "10.0.0.1".parse().unwrap(), &proxies);
         // Falls back to socket addr when XFF can't be parsed
+        assert_eq!(ip.to_string(), "10.0.0.1");
+    }
+
+    #[test]
+    fn test_client_ip_forged_xff_through_trusted_proxy() {
+        // The client pre-sends a forged XFF entry and the trusted proxy
+        // appends the real address. Only the proxy-appended (rightmost)
+        // entry may win; the forged leftmost must be ignored.
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "6.6.6.6, 203.0.113.9".parse().unwrap());
+        let proxies = vec!["10.0.0.0/8".into()];
+        let ip = client_ip(&headers, "10.0.0.1".parse().unwrap(), &proxies);
+        assert_eq!(ip.to_string(), "203.0.113.9");
+    }
+
+    #[test]
+    fn test_client_ip_walks_past_trusted_chain() {
+        // Two trusted proxies in a chain: the rightmost entry is the hop we
+        // are connected to (trusted), the next is the first proxy (trusted),
+        // so the first untrusted entry is the client.
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "203.0.113.9, 10.0.0.2".parse().unwrap());
+        let proxies = vec!["10.0.0.0/8".into()];
+        let ip = client_ip(&headers, "10.0.0.1".parse().unwrap(), &proxies);
+        assert_eq!(ip.to_string(), "203.0.113.9");
+    }
+
+    #[test]
+    fn test_client_ip_all_entries_trusted_returns_leftmost() {
+        // Degenerate chain where every reported address is a trusted proxy:
+        // the leftmost entry is the origin, vouched for by that proxy.
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "10.0.0.3, 10.0.0.2".parse().unwrap());
+        let proxies = vec!["10.0.0.0/8".into()];
+        let ip = client_ip(&headers, "10.0.0.1".parse().unwrap(), &proxies);
+        assert_eq!(ip.to_string(), "10.0.0.3");
+    }
+
+    #[test]
+    fn test_client_ip_malformed_entry_amid_trusted_chain_falls_back() {
+        // A malformed entry breaks the chain: entries to its left were not
+        // appended under our control, so fall back to the peer address.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            "203.0.113.9, junk, 10.0.0.2".parse().unwrap(),
+        );
+        let proxies = vec!["10.0.0.0/8".into()];
+        let ip = client_ip(&headers, "10.0.0.1".parse().unwrap(), &proxies);
         assert_eq!(ip.to_string(), "10.0.0.1");
     }
 

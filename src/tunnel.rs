@@ -114,6 +114,8 @@ pub struct TunnelConfig {
     /// server presents a different key.
     pub expected_host_key: Option<String>,
     /// Path to the known_hosts file for trust-on-first-use persistence.
+    /// A first connection is accepted only when the presented host key can be
+    /// recorded here; without this path, unpinned hosts are refused outright.
     pub known_hosts_path: Option<PathBuf>,
 }
 
@@ -203,14 +205,34 @@ fn append_known_host(
         .map_err(|e| format!("failed to write known_hosts entry: {}", e))
 }
 
-/// SSH client handler that verifies the server's host key against an expected
-/// key stored in the address book. If no expected key is set (legacy entries),
-/// the connection is accepted with a warning log.
+/// SSH client handler verifying the jump host's server key. Trust sources, in
+/// order: the address book's per-entry host key pin, then the known_hosts file
+/// (trust-on-first-use). With no pin established anywhere, the presented key
+/// is accepted only when it can be durably recorded in known_hosts. A failed
+/// pin write refuses the connection, and without a known_hosts path at all
+/// the connection is refused (fail closed, never accepted unverifiable).
 struct TunnelHandler {
     expected_key: Option<String>,
     hop_index: usize,
     jump_host: String,
     known_hosts_path: Option<PathBuf>,
+}
+
+impl TunnelHandler {
+    /// Split the `host:port` this hop connects to.
+    ///
+    /// Host parsing is heuristic (an `rfind(':')` split misreads bare IPv6
+    /// literals), but read and append both go through this helper, so a pin
+    /// and its later lookup always resolve to the same known_hosts row.
+    fn host_and_port(&self) -> (&str, u16) {
+        match self.jump_host.rfind(':') {
+            Some(pos) => (
+                &self.jump_host[..pos],
+                self.jump_host[pos + 1..].parse().unwrap_or(22),
+            ),
+            None => (self.jump_host.as_str(), 22),
+        }
+    }
 }
 
 impl client::Handler for TunnelHandler {
@@ -230,57 +252,60 @@ impl client::Handler for TunnelHandler {
             Some(expected.clone())
         } else {
             self.known_hosts_path.as_ref().and_then(|path| {
-                let (host, port) = if let Some(colon_pos) = self.jump_host.rfind(':') {
-                    let host = &self.jump_host[..colon_pos];
-                    let port: u16 = self.jump_host[colon_pos + 1..].parse().unwrap_or(22);
-                    (host, port)
-                } else {
-                    (self.jump_host.as_str(), 22u16)
-                };
+                let (host, port) = self.host_and_port();
                 read_known_hosts(path, host, port)
             })
         };
 
         let Some(ref expected) = effective_key else {
-            // First use — no pin in address book or known_hosts.
-            // Auto-pin: persist the fingerprint for future verification.
-            if let Some(ref path) = self.known_hosts_path {
-                let (host, port) = if let Some(colon_pos) = self.jump_host.rfind(':') {
-                    let host = &self.jump_host[..colon_pos];
-                    let port: u16 = self.jump_host[colon_pos + 1..].parse().unwrap_or(22);
-                    (host, port)
-                } else {
-                    (self.jump_host.as_str(), 22u16)
-                };
-                match append_known_host(path, host, port, &fingerprint.to_string()) {
-                    Ok(()) => {
-                        tracing::info!(
-                            hop = self.hop_index,
-                            host = %self.jump_host,
-                            fingerprint = %fingerprint,
-                            algorithm = %algorithm,
-                            "SSH host key auto-pinned (TOFU) — stored in known_hosts"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            hop = self.hop_index,
-                            host = %self.jump_host,
-                            error = %e,
-                            "Failed to persist SSH host key — accepting on trust for this session"
-                        );
-                    }
-                }
-            } else {
-                tracing::warn!(
+            // No pin in the address book and no usable known_hosts entry:
+            // either this is the first use, or known_hosts is not configured.
+            // Both paths below fail closed: a key that has never been
+            // verified must not pass unless the verification can be recorded
+            // for the next connection.
+            let (host, port) = self.host_and_port();
+            let Some(ref path) = self.known_hosts_path else {
+                tracing::error!(
                     hop = self.hop_index,
                     host = %self.jump_host,
                     fingerprint = %fingerprint,
                     algorithm = %algorithm,
-                    "SSH host key not pinned and no known_hosts path — accepting on trust (TOFU)"
+                    "SSH host key is not pinned and no known_hosts path is \
+                     configured, refusing the connection. Set known_hosts_path \
+                     for the tunnel or pin the host key in the address book \
+                     (host_key field)."
                 );
+                return Ok(false);
+            };
+            // First use (TOFU): pin the key and accept only if the pin is
+            // durably recorded. Accepting without the write would leave the
+            // next connection verifying against whatever attacker served
+            // this one.
+            match append_known_host(path, host, port, &fingerprint.to_string()) {
+                Ok(()) => {
+                    tracing::info!(
+                        hop = self.hop_index,
+                        host = %self.jump_host,
+                        fingerprint = %fingerprint,
+                        algorithm = %algorithm,
+                        "SSH host key auto-pinned (TOFU) — stored in known_hosts"
+                    );
+                    return Ok(true);
+                }
+                Err(e) => {
+                    tracing::error!(
+                        hop = self.hop_index,
+                        host = %self.jump_host,
+                        known_hosts = %path.display(),
+                        error = %e,
+                        "SSH host key could not be recorded to known_hosts, \
+                         refusing the connection (fail closed). Fix write access \
+                         to known_hosts or pin the host key in the address book \
+                         (host_key field)."
+                    );
+                    return Ok(false);
+                }
             }
-            return Ok(true);
         };
 
         // The stored key may be a fingerprint or an OpenSSH public key;
@@ -635,6 +660,7 @@ async fn tunnel_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use russh::client::Handler as _;
 
     #[test]
     fn default_port_is_22() {
@@ -818,27 +844,115 @@ mod tests {
         assert!(config.expected_host_key.is_none());
     }
 
-    #[test]
-    fn tunnel_handler_with_no_expected_key_is_tofu() {
-        let handler = TunnelHandler {
+    // ── check_server_key fail-closed matrix ─────────────────────────────
+
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// The SHA-256 fingerprint of [`test_server_key`] (same bytes as the
+    /// OpenSSH key accepted by the `normalize_host_key` tests).
+    const TEST_KEY_FP: &str = "SHA256:ldyiXa1JQakitNU5tErauu8DvWQ1dZ7aXu+rm7KQuog";
+
+    fn test_server_key() -> PublicKeyOrCertificate {
+        russh::keys::parse_public_key_base64(
+            "AAAAC3NzaC1lZDI1NTE5AAAAILagOJFgwaMNhBWQINinKOXmqS4Gh5NgxgriXwdOoINJ",
+        )
+        .unwrap()
+        .into()
+    }
+
+    /// Unique temp path so parallel tests never share a known_hosts file.
+    fn scratch_path(tag: &str) -> PathBuf {
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!("persea-tunnel-{}-{}-{tag}", std::process::id(), n))
+    }
+
+    #[tokio::test]
+    async fn check_server_key_pins_first_use_and_accepts() {
+        let path = scratch_path("tofu");
+        let mut handler = TunnelHandler {
+            expected_key: None,
+            hop_index: 0,
+            jump_host: "test.host".into(),
+            known_hosts_path: Some(path.clone()),
+        };
+        let key = test_server_key();
+        assert!(handler.check_server_key(&key).await.unwrap());
+        // The pin must be durably recorded for the next connection.
+        let pinned = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(pinned, format!("test.host:22:{TEST_KEY_FP}\n"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn check_server_key_fails_closed_when_pin_unrecordable() {
+        // A directory cannot be opened for append, so the TOFU pin write
+        // fails: the connection must be refused, not accepted on trust.
+        let dir = scratch_path("unrecordable");
+        std::fs::create_dir(&dir).unwrap();
+        let mut handler = TunnelHandler {
+            expected_key: None,
+            hop_index: 0,
+            jump_host: "test.host".into(),
+            known_hosts_path: Some(dir.clone()),
+        };
+        let key = test_server_key();
+        assert!(!handler.check_server_key(&key).await.unwrap());
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[tokio::test]
+    async fn check_server_key_fails_closed_without_known_hosts_path() {
+        let mut handler = TunnelHandler {
             expected_key: None,
             hop_index: 0,
             jump_host: "test.host".into(),
             known_hosts_path: None,
         };
-        assert!(handler.expected_key.is_none());
-        assert_eq!(handler.hop_index, 0);
+        let key = test_server_key();
+        assert!(!handler.check_server_key(&key).await.unwrap());
     }
 
-    #[test]
-    fn tunnel_handler_with_expected_key() {
-        let handler = TunnelHandler {
-            expected_key: Some("ssh-ed25519 AAAA...".into()),
-            hop_index: 1,
-            jump_host: "bastion".into(),
+    #[tokio::test]
+    async fn check_server_key_verifies_pinned_key() {
+        let mut handler = TunnelHandler {
+            expected_key: Some(TEST_KEY_FP.into()),
+            hop_index: 0,
+            jump_host: "test.host".into(),
             known_hosts_path: None,
         };
-        assert!(handler.expected_key.is_some());
-        assert_eq!(handler.hop_index, 1);
+        let key = test_server_key();
+        assert!(handler.check_server_key(&key).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn check_server_key_refuses_pinned_key_mismatch() {
+        let mut handler = TunnelHandler {
+            expected_key: Some("SHA256:not-the-presented-key".into()),
+            hop_index: 0,
+            jump_host: "test.host".into(),
+            known_hosts_path: None,
+        };
+        let key = test_server_key();
+        assert!(!handler.check_server_key(&key).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn check_server_key_verifies_known_hosts_entry() {
+        // Already pinned in known_hosts (no address-book key): verify, and
+        // the pin file must not be rewritten.
+        let path = scratch_path("known-entry");
+        std::fs::write(&path, format!("test.host:22:{TEST_KEY_FP}\n")).unwrap();
+        let mut handler = TunnelHandler {
+            expected_key: None,
+            hop_index: 0,
+            jump_host: "test.host".into(),
+            known_hosts_path: Some(path.clone()),
+        };
+        let key = test_server_key();
+        assert!(handler.check_server_key(&key).await.unwrap());
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(contents, format!("test.host:22:{TEST_KEY_FP}\n"));
+        let _ = std::fs::remove_file(&path);
     }
 }
