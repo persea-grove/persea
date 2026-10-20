@@ -1,6 +1,6 @@
 //! SQLite database layer for admin/API key management.
 
-use crate::audit::{compute_event_hash, AuditEvent, AuditFilters};
+use crate::audit::{AuditEvent, AuditFilters, compute_event_hash};
 use crate::auth_provider::RecheckVerdict;
 use crate::db_pool::DbPool;
 use crate::providers_db::{DbProvider, MoveDirection};
@@ -8,7 +8,7 @@ use crate::rbac::{ConnectionGroup, CustomRole, EntityType, ObjectPermission, Per
 use crate::role::role_level;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use rand::RngExt;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
 use std::net::IpAddr;
 use std::path::Path;
@@ -955,11 +955,7 @@ pub fn rotate_key(db: &Db, name: &str) -> rusqlite::Result<Option<String>> {
         "UPDATE admins SET api_key_hash = ?1 WHERE name = ?2",
         params![key_hash, name],
     )?;
-    if changed > 0 {
-        Ok(Some(key))
-    } else {
-        Ok(None)
-    }
+    if changed > 0 { Ok(Some(key)) } else { Ok(None) }
 }
 
 #[derive(Debug)]
@@ -1516,28 +1512,32 @@ pub fn enable_user(db: &Db, email: &str) -> rusqlite::Result<bool> {
 /// Delete a user by email (also deletes their auth sessions and API tokens).
 pub fn delete_user(db: &Db, email: &str) -> rusqlite::Result<bool> {
     db_route!(db, delete_user_pool, email.to_string());
-    let conn = db.lock().unwrap();
+    let mut conn = db.lock().unwrap();
+    // All-or-nothing cascade (persea#342): half-deleted user state
+    // (sessions gone, user alive) must not survive a mid-sequence failure.
+    let tx = conn.transaction()?;
     // Delete auth sessions first
-    conn.execute(
+    tx.execute(
         "DELETE FROM auth_sessions WHERE user_id IN (SELECT id FROM users WHERE email = ?1)",
         params![email],
     )?;
     // Delete user API tokens
-    conn.execute(
+    tx.execute(
         "DELETE FROM user_api_tokens WHERE user_id IN (SELECT id FROM users WHERE email = ?1)",
         params![email],
     )?;
     // Personal folders: remove the references first, then the folders.
     // Shared address book entries are never touched.
-    conn.execute(
+    tx.execute(
         "DELETE FROM user_folder_entries WHERE user_id IN (SELECT id FROM users WHERE email = ?1)",
         params![email],
     )?;
-    conn.execute(
+    tx.execute(
         "DELETE FROM user_folders WHERE user_id IN (SELECT id FROM users WHERE email = ?1)",
         params![email],
     )?;
-    let changed = conn.execute("DELETE FROM users WHERE email = ?1", params![email])?;
+    let changed = tx.execute("DELETE FROM users WHERE email = ?1", params![email])?;
+    tx.commit()?;
     Ok(changed > 0)
 }
 
@@ -1672,6 +1672,9 @@ pub fn ensure_local_groups(db: &Db, groups: &[String]) -> rusqlite::Result<usize
     let conn = db.lock().unwrap();
     let mut created = 0usize;
     {
+        // Per-row idempotent auto-provisioning, NOT transactional
+        // (persea#342): each INSERT IGNORE stands alone and the next login
+        // retries it.
         let mut stmt = conn.prepare(
             "INSERT OR IGNORE INTO local_groups (name, description, auto_provisioned)
              VALUES (?1, 'Auto-provisioned from auth provider groups', 1)",
@@ -2091,6 +2094,9 @@ pub fn validate_user_token(db: &Db, token: &str) -> Result<(User, UserApiToken),
         )
     {
         let conn = db.lock().unwrap();
+        // Two intentional fire-and-forget writes (persea#342): the token
+        // delete and the audit-log insert touch different records, and the
+        // audit outcome is deliberately ignored below.
         let _ = conn.execute(
             "DELETE FROM user_api_tokens WHERE id = ?1",
             params![token_info.id],
@@ -2244,6 +2250,9 @@ pub fn list_token_audit_log(
 pub fn cleanup_old_audit_log(db: &Db, retain_days: u32) -> rusqlite::Result<usize> {
     db_route!(db, cleanup_old_audit_log_pool, retain_days);
     let conn = db.lock().unwrap();
+    // Retention prune over two independent tables; NOT transactional
+    // (persea#342): the tables share no record and a partial prune just
+    // leaves old rows for the next run.
     let modifier = format!("-{} days", retain_days);
     let tok = conn.execute(
         "DELETE FROM token_audit_log WHERE created_at < datetime('now', ?1)",
@@ -4308,7 +4317,7 @@ mod tests {
     fn test_hash_key_sha256() {
         let hash = hash_key("test-api-key");
         assert_eq!(hash.len(), 64); // SHA-256 = 64 hex chars
-                                    // Deterministic
+        // Deterministic
         assert_eq!(hash, hash_key("test-api-key"));
     }
 
@@ -4994,7 +5003,7 @@ mod tests {
         assert!(parse_expires_at("2030-01-01 00:00:00").is_some()); // SQLite datetime
         assert!(parse_expires_at("2030-01-01T00:00:00").is_some()); // ISO, no zone
         assert!(parse_expires_at("2030-12-31").is_some()); // bare date
-                                                           // Garbage / empty must be None so the caller fails closed.
+        // Garbage / empty must be None so the caller fails closed.
         assert!(parse_expires_at("not-a-date").is_none());
         assert!(parse_expires_at("").is_none());
         assert!(parse_expires_at("2026-13-40").is_none());
@@ -5044,12 +5053,16 @@ mod tests {
         let (_id2, _t2) = create_user_token(&db, uid, "self-service", None, None).unwrap();
         let tokens = list_user_tokens(&db, uid).unwrap();
         assert_eq!(tokens.len(), 2);
-        assert!(tokens
-            .iter()
-            .any(|t| t.name == "Persea Desktop (login)" && t.token_type == "scoped"));
-        assert!(tokens
-            .iter()
-            .any(|t| t.name == "self-service" && t.token_type == "user"));
+        assert!(
+            tokens
+                .iter()
+                .any(|t| t.name == "Persea Desktop (login)" && t.token_type == "scoped")
+        );
+        assert!(
+            tokens
+                .iter()
+                .any(|t| t.name == "self-service" && t.token_type == "user")
+        );
     }
 
     #[test]
@@ -5423,8 +5436,7 @@ fn local_group_row(row: &rusqlite::Row) -> rusqlite::Result<LocalGroup> {
 /// `allowed_groups` and its entries' `allowed_groups` (INSTR is
 /// case-sensitive, matching the exact-match semantics of
 /// `resolve_folder_access`).
-const LOCAL_GROUP_COLUMNS: &str =
-    "lg.id, lg.name, lg.description, lg.auto_provisioned, lg.created_at, \
+const LOCAL_GROUP_COLUMNS: &str = "lg.id, lg.name, lg.description, lg.auto_provisioned, lg.created_at, \
      (SELECT COUNT(*) FROM group_mappings gm WHERE gm.group_id = lg.id), \
      (SELECT COUNT(DISTINCT x.id) FROM (\
        SELECT f.id FROM address_book_folders f \
@@ -5677,9 +5689,9 @@ pub fn delete_provider_group_mapping(db: &Db, mapping_id: i64) -> rusqlite::Resu
 // std channel, which is safe from any context.
 // ══════════════════════════════════════════════════════════════════════
 
-use sqlx::mysql::{MySql, MySqlArguments, MySqlPool, MySqlRow};
-use sqlx::postgres::{PgArguments, PgPool, PgRow, Postgres};
-use sqlx::sqlite::{Sqlite, SqliteArguments, SqlitePool, SqliteRow};
+use sqlx::mysql::{MySql, MySqlArguments, MySqlConnection, MySqlPool, MySqlRow};
+use sqlx::postgres::{PgArguments, PgConnection, PgPool, PgRow, Postgres};
+use sqlx::sqlite::{Sqlite, SqliteArguments, SqliteConnection, SqlitePool, SqliteRow};
 use sqlx::{Arguments as SqlxArguments, Decode, Row as SqlxRow, Type};
 
 /// Backend-agnostic argument list for dynamically-built SQLx queries.
@@ -5874,6 +5886,147 @@ async fn sqlite_fetch_opt(
         .fetch_optional(pool)
         .await
         .map(|r| r.map(RowProxy::Sqlite))
+}
+
+/// Execute one statement on an already-open PostgreSQL connection (used by
+/// the `pool_tx!` transaction runner; multi-statement sequences must run on
+/// the same connection to roll back together).
+async fn pg_exec_on(conn: &mut PgConnection, sql: &str, args: &[Arg]) -> Result<u64, sqlx::Error> {
+    let mut a = PgArguments::default();
+    for arg in args {
+        push_pg(&mut a, arg);
+    }
+    Ok(sqlx::query_with(sqlx::AssertSqlSafe(sql), a)
+        .execute(conn)
+        .await?
+        .rows_affected())
+}
+
+/// Execute one statement on an already-open MySQL connection (see
+/// [`pg_exec_on`]).
+async fn mysql_exec_on(
+    conn: &mut MySqlConnection,
+    sql: &str,
+    args: &[Arg],
+) -> Result<u64, sqlx::Error> {
+    let mut a = MySqlArguments::default();
+    for arg in args {
+        push_mysql(&mut a, arg);
+    }
+    Ok(sqlx::query_with(sqlx::AssertSqlSafe(sql), a)
+        .execute(conn)
+        .await?
+        .rows_affected())
+}
+
+/// Execute one statement on an already-open SQLite connection (see
+/// [`pg_exec_on`]).
+async fn sqlite_exec_on(
+    conn: &mut SqliteConnection,
+    sql: &str,
+    args: &[Arg],
+) -> Result<u64, sqlx::Error> {
+    let mut a = SqliteArguments::default();
+    for arg in args {
+        push_sqlite(&mut a, arg);
+    }
+    Ok(sqlx::query_with(sqlx::AssertSqlSafe(sql), a)
+        .execute(conn)
+        .await?
+        .rows_affected())
+}
+
+/// One pooled connection with an open transaction, per backend. Statements
+/// executed through [`PoolTx::exec`] all run on this one connection, so a
+/// multi-statement write sequence either commits together or rolls back
+/// together (persea#342).
+enum PoolTx<'c> {
+    Pg(&'c mut PgConnection),
+    My(&'c mut MySqlConnection),
+    Sq(&'c mut SqliteConnection),
+}
+
+impl PoolTx<'_> {
+    /// Execute one statement inside the transaction. The SQL must already
+    /// use backend-appropriate placeholders (sequences here build it with
+    /// `qsql!`); errors map to `rusqlite::Error` like every other pool
+    /// statement.
+    async fn exec(&mut self, sql: &str, args: &[Arg]) -> rusqlite::Result<u64> {
+        match self {
+            PoolTx::Pg(conn) => pg_exec_on(conn, sql, args).await.map_err(map_sqlx_err),
+            PoolTx::My(conn) => mysql_exec_on(conn, sql, args).await.map_err(map_sqlx_err),
+            PoolTx::Sq(conn) => sqlite_exec_on(conn, sql, args).await.map_err(map_sqlx_err),
+        }
+    }
+}
+
+/// Run a multi-statement write sequence inside a transaction on the SQLx
+/// pool backend (persea#342).
+///
+/// Usage:
+///
+/// ```ignore
+/// pool_tx!(pool, |tx| async move {
+///     tx.exec(delete_sql(pool), &[Arg::Str(user_key.clone())]).await?;
+///     for (k, v) in &entries {
+///         tx.exec(insert_sql(pool), &[...]).await?;
+///     }
+///     Ok(())
+/// })
+/// ```
+///
+/// The body runs on ONE pooled connection; all statements commit together,
+/// and an error at any statement rolls the whole sequence back instead of
+/// leaving partial state. Errors surface as `rusqlite::Result`, matching
+/// every other pool store call.
+macro_rules! pool_tx {
+    ($pool:expr, |$tx:ident| $body:expr) => {{
+        match $pool {
+            DbPool::Postgres(p) => {
+                let mut tx = p.begin().await.map_err(map_sqlx_err)?;
+                let mut $tx = PoolTx::Pg(&mut *tx);
+                match $body.await {
+                    Ok(v) => {
+                        tx.commit().await.map_err(map_sqlx_err)?;
+                        Ok(v)
+                    }
+                    Err(e) => {
+                        let _ = tx.rollback().await;
+                        Err(e)
+                    }
+                }
+            }
+            DbPool::MySQL(p) => {
+                let mut tx = p.begin().await.map_err(map_sqlx_err)?;
+                let mut $tx = PoolTx::My(&mut *tx);
+                match $body.await {
+                    Ok(v) => {
+                        tx.commit().await.map_err(map_sqlx_err)?;
+                        Ok(v)
+                    }
+                    Err(e) => {
+                        let _ = tx.rollback().await;
+                        Err(e)
+                    }
+                }
+            }
+            DbPool::SQLite(p) => {
+                let mut tx = p.begin().await.map_err(map_sqlx_err)?;
+                let mut $tx = PoolTx::Sq(&mut *tx);
+                match $body.await {
+                    Ok(v) => {
+                        tx.commit().await.map_err(map_sqlx_err)?;
+                        Ok(v)
+                    }
+                    Err(e) => {
+                        let _ = tx.rollback().await;
+                        Err(e)
+                    }
+                }
+            }
+            DbPool::None => Err(no_pool_err()),
+        }
+    }};
 }
 
 async fn exec_returning_id(pool: &DbPool, sql: &str, args: &[Arg]) -> Result<i64, sqlx::Error> {
@@ -6377,11 +6530,7 @@ async fn rotate_key_pool(pool: &DbPool, name: String) -> rusqlite::Result<Option
     )
     .await
     .map_err(map_sqlx_err)?;
-    if changed > 0 {
-        Ok(Some(key))
-    } else {
-        Ok(None)
-    }
+    if changed > 0 { Ok(Some(key)) } else { Ok(None) }
 }
 
 // ── Users ─────────────────────────────────────────────────────────────
@@ -6776,69 +6925,72 @@ async fn delete_user_pool(pool: &DbPool, email: String) -> rusqlite::Result<bool
     };
     let uid = row.get::<i64>(0);
     let id_arg = [Arg::I64(uid)];
-    for sql in [
-        qsql!(
-            pool,
-            "DELETE FROM auth_sessions WHERE user_id = $1",
-            "DELETE FROM auth_sessions WHERE user_id = ?"
-        ),
-        qsql!(
-            pool,
-            "DELETE FROM user_api_tokens WHERE user_id = $1",
-            "DELETE FROM user_api_tokens WHERE user_id = ?"
-        ),
-        qsql!(
-            pool,
-            "DELETE FROM totp_secrets WHERE user_id = $1",
-            "DELETE FROM totp_secrets WHERE user_id = ?"
-        ),
-        qsql!(
-            pool,
-            "DELETE FROM user_preset_credentials WHERE user_id = $1",
-            "DELETE FROM user_preset_credentials WHERE user_id = ?"
-        ),
-        qsql!(
-            pool,
-            "DELETE FROM login_credentials WHERE user_id = $1",
-            "DELETE FROM login_credentials WHERE user_id = ?"
-        ),
-        qsql!(
-            pool,
-            "DELETE FROM auth_pending_mfa WHERE user_id = $1",
-            "DELETE FROM auth_pending_mfa WHERE user_id = ?"
-        ),
-        qsql!(
-            pool,
-            "DELETE FROM rbac_user_groups WHERE user_id = $1",
-            "DELETE FROM rbac_user_groups WHERE user_id = ?"
-        ),
-        // Personal folders: references first, then the folders themselves.
-        // Shared address book entries are never touched.
-        qsql!(
-            pool,
-            "DELETE FROM user_folder_entries WHERE user_id = $1",
-            "DELETE FROM user_folder_entries WHERE user_id = ?"
-        ),
-        qsql!(
-            pool,
-            "DELETE FROM user_folders WHERE user_id = $1",
-            "DELETE FROM user_folders WHERE user_id = ?"
-        ),
-    ] {
-        pool_exec(pool, sql, &id_arg).await.map_err(map_sqlx_err)?;
-    }
-    let changed = pool_exec(
-        pool,
-        qsql!(
-            pool,
-            "DELETE FROM users WHERE email = $1",
-            "DELETE FROM users WHERE email = ?"
-        ),
-        &[Arg::Str(email)],
-    )
-    .await
-    .map_err(map_sqlx_err)?;
-    Ok(changed > 0)
+    // All-or-nothing cascade (persea#342): a failure partway through the
+    // dependent-table deletes must not leave a half-deleted user behind.
+    pool_tx!(pool, |tx| async move {
+        for sql in [
+            qsql!(
+                pool,
+                "DELETE FROM auth_sessions WHERE user_id = $1",
+                "DELETE FROM auth_sessions WHERE user_id = ?"
+            ),
+            qsql!(
+                pool,
+                "DELETE FROM user_api_tokens WHERE user_id = $1",
+                "DELETE FROM user_api_tokens WHERE user_id = ?"
+            ),
+            qsql!(
+                pool,
+                "DELETE FROM totp_secrets WHERE user_id = $1",
+                "DELETE FROM totp_secrets WHERE user_id = ?"
+            ),
+            qsql!(
+                pool,
+                "DELETE FROM user_preset_credentials WHERE user_id = $1",
+                "DELETE FROM user_preset_credentials WHERE user_id = ?"
+            ),
+            qsql!(
+                pool,
+                "DELETE FROM login_credentials WHERE user_id = $1",
+                "DELETE FROM login_credentials WHERE user_id = ?"
+            ),
+            qsql!(
+                pool,
+                "DELETE FROM auth_pending_mfa WHERE user_id = $1",
+                "DELETE FROM auth_pending_mfa WHERE user_id = ?"
+            ),
+            qsql!(
+                pool,
+                "DELETE FROM rbac_user_groups WHERE user_id = $1",
+                "DELETE FROM rbac_user_groups WHERE user_id = ?"
+            ),
+            // Personal folders: references first, then the folders themselves.
+            // Shared address book entries are never touched.
+            qsql!(
+                pool,
+                "DELETE FROM user_folder_entries WHERE user_id = $1",
+                "DELETE FROM user_folder_entries WHERE user_id = ?"
+            ),
+            qsql!(
+                pool,
+                "DELETE FROM user_folders WHERE user_id = $1",
+                "DELETE FROM user_folders WHERE user_id = ?"
+            ),
+        ] {
+            tx.exec(sql, &id_arg).await?;
+        }
+        let changed = tx
+            .exec(
+                qsql!(
+                    pool,
+                    "DELETE FROM users WHERE email = $1",
+                    "DELETE FROM users WHERE email = ?"
+                ),
+                &[Arg::Str(email)],
+            )
+            .await?;
+        Ok(changed > 0)
+    })
 }
 
 // ── Preset + login credentials ─────────────────────────────────────────
@@ -7594,6 +7746,8 @@ async fn delete_group_mapping_pool(pool: &DbPool, id: i64) -> rusqlite::Result<b
 }
 
 async fn upsert_seen_groups_pool(pool: &DbPool, groups: Vec<String>) -> rusqlite::Result<()> {
+    // Per-row idempotent upserts of login-claim markers, NOT transactional
+    // (persea#342): rows are independent and any run repeats the upserts.
     for g in groups {
         let trimmed = g.trim();
         if trimmed.is_empty() {
@@ -7616,6 +7770,8 @@ async fn upsert_seen_groups_pool(pool: &DbPool, groups: Vec<String>) -> rusqlite
 }
 
 async fn ensure_local_groups_pool(pool: &DbPool, groups: Vec<String>) -> rusqlite::Result<usize> {
+    // Per-row idempotent auto-provisioning, NOT transactional (persea#342):
+    // each INSERT IGNORE stands alone and the next login retries it.
     let mut created = 0usize;
     for g in groups {
         let trimmed = g.trim();
@@ -7867,6 +8023,9 @@ async fn validate_user_token_pool(
             .await
             .unwrap_or(RecheckVerdict::Unavailable);
         if matches!(verdict, RecheckVerdict::Invalid) {
+            // Two intentional fire-and-forget writes (persea#342): the token
+            // delete and the audit-log insert touch different records, and
+            // the audit outcome is deliberately ignored below.
             let _ = pool_exec(
                 pool,
                 qsql!(
@@ -8055,6 +8214,9 @@ async fn list_token_audit_log_pool(
 }
 
 async fn cleanup_old_audit_log_pool(pool: &DbPool, retain_days: u32) -> rusqlite::Result<usize> {
+    // Retention prune over two independent tables; NOT transactional
+    // (persea#342): the tables share no record and a partial prune just
+    // leaves old rows for the next run.
     let sql = match pool {
         DbPool::MySQL(_) => format!(
             "DELETE FROM token_audit_log WHERE created_at < {}",
@@ -8775,9 +8937,9 @@ fn ts_now_plus_secs(pool: &DbPool, param: &str) -> String {
         DbPool::Postgres(_) => format!(
             "to_char((now() at time zone 'utc') + make_interval(secs => {param}), 'YYYY-MM-DD HH24:MI:SS')"
         ),
-        DbPool::MySQL(_) => format!(
-            "DATE_FORMAT(UTC_TIMESTAMP() + INTERVAL {param} SECOND, '%Y-%m-%d %H:%i:%s')"
-        ),
+        DbPool::MySQL(_) => {
+            format!("DATE_FORMAT(UTC_TIMESTAMP() + INTERVAL {param} SECOND, '%Y-%m-%d %H:%i:%s')")
+        }
         _ => format!("datetime('now', {param})"),
     }
 }
@@ -8788,9 +8950,9 @@ fn ts_now_minus_days(pool: &DbPool, param: &str) -> String {
         DbPool::Postgres(_) => format!(
             "to_char((now() at time zone 'utc') - make_interval(days => {param}), 'YYYY-MM-DD HH24:MI:SS')"
         ),
-        DbPool::MySQL(_) => format!(
-            "DATE_FORMAT(UTC_TIMESTAMP() - INTERVAL {param} DAY, '%Y-%m-%d %H:%i:%s')"
-        ),
+        DbPool::MySQL(_) => {
+            format!("DATE_FORMAT(UTC_TIMESTAMP() - INTERVAL {param} DAY, '%Y-%m-%d %H:%i:%s')")
+        }
         _ => format!("datetime('now', {param})"),
     }
 }
@@ -8801,9 +8963,9 @@ fn ts_now_minus_secs(pool: &DbPool, param: &str) -> String {
         DbPool::Postgres(_) => format!(
             "to_char((now() at time zone 'utc') - make_interval(secs => {param}), 'YYYY-MM-DD HH24:MI:SS')"
         ),
-        DbPool::MySQL(_) => format!(
-            "DATE_FORMAT(UTC_TIMESTAMP() - INTERVAL {param} SECOND, '%Y-%m-%d %H:%i:%s')"
-        ),
+        DbPool::MySQL(_) => {
+            format!("DATE_FORMAT(UTC_TIMESTAMP() - INTERVAL {param} SECOND, '%Y-%m-%d %H:%i:%s')")
+        }
         _ => format!("datetime('now', {param})"),
     }
 }
@@ -9088,8 +9250,7 @@ async fn session_activity_by_hour_pool(
          WHERE started_at >= datetime('now', ?) \
          GROUP BY hour ORDER BY hour ASC"
     );
-    let mysql_sql =
-        "SELECT DATE_FORMAT(started_at, '%Y-%m-%d %H:00:00') AS hour, COUNT(*) AS count \
+    let mysql_sql = "SELECT DATE_FORMAT(started_at, '%Y-%m-%d %H:00:00') AS hour, COUNT(*) AS count \
          FROM session_history \
          WHERE started_at >= DATE_FORMAT(UTC_TIMESTAMP() - INTERVAL ? HOUR, '%Y-%m-%d %H:%i:%s') \
          GROUP BY hour ORDER BY hour ASC";
@@ -9795,55 +9956,52 @@ async fn delete_ab_folder_pool(
         .map_err(map_sqlx_err)?;
         rows.iter().map(|r| r.get::<i64>(0)).collect()
     };
-    for id in &entry_ids {
-        pool_exec(
-            pool,
+    // Atomic cascade (persea#342): the rusqlite path already wraps this
+    // same sequence in a transaction; the pool path must match.
+    pool_tx!(pool, |tx| async move {
+        for id in &entry_ids {
+            tx.exec(
+                qsql!(
+                    pool,
+                    "DELETE FROM address_book_credentials WHERE entry_id = $1",
+                    "DELETE FROM address_book_credentials WHERE entry_id = ?"
+                ),
+                &[Arg::I64(*id)],
+            )
+            .await?;
+            // Personal-folder references to these shared entries go with them;
+            // the shared entries themselves are the ones being deleted here.
+            tx.exec(
+                qsql!(
+                    pool,
+                    "DELETE FROM user_folder_entries WHERE entry_id = $1",
+                    "DELETE FROM user_folder_entries WHERE entry_id = ?"
+                ),
+                &[Arg::I64(*id)],
+            )
+            .await?;
+        }
+        tx.exec(
             qsql!(
                 pool,
-                "DELETE FROM address_book_credentials WHERE entry_id = $1",
-                "DELETE FROM address_book_credentials WHERE entry_id = ?"
+                "DELETE FROM address_book_entries WHERE folder_id = $1",
+                "DELETE FROM address_book_entries WHERE folder_id = ?"
             ),
-            &[Arg::I64(*id)],
+            &[Arg::I64(fid)],
         )
-        .await
-        .map_err(map_sqlx_err)?;
-        // Personal-folder references to these shared entries go with them;
-        // the shared entries themselves are the ones being deleted here.
-        pool_exec(
-            pool,
-            qsql!(
-                pool,
-                "DELETE FROM user_folder_entries WHERE entry_id = $1",
-                "DELETE FROM user_folder_entries WHERE entry_id = ?"
-            ),
-            &[Arg::I64(*id)],
-        )
-        .await
-        .map_err(map_sqlx_err)?;
-    }
-    pool_exec(
-        pool,
-        qsql!(
-            pool,
-            "DELETE FROM address_book_entries WHERE folder_id = $1",
-            "DELETE FROM address_book_entries WHERE folder_id = ?"
-        ),
-        &[Arg::I64(fid)],
-    )
-    .await
-    .map_err(map_sqlx_err)?;
-    let changed = pool_exec(
-        pool,
-        qsql!(
-            pool,
-            "DELETE FROM address_book_folders WHERE scope = $1 AND name = $2",
-            "DELETE FROM address_book_folders WHERE scope = ? AND name = ?"
-        ),
-        &[Arg::Str(scope), Arg::Str(name)],
-    )
-    .await
-    .map_err(map_sqlx_err)?;
-    Ok(changed > 0)
+        .await?;
+        let changed = tx
+            .exec(
+                qsql!(
+                    pool,
+                    "DELETE FROM address_book_folders WHERE scope = $1 AND name = $2",
+                    "DELETE FROM address_book_folders WHERE scope = ? AND name = ?"
+                ),
+                &[Arg::Str(scope), Arg::Str(name)],
+            )
+            .await?;
+        Ok(changed > 0)
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -10024,41 +10182,40 @@ async fn set_ab_entry_protocol_config_pool(
 }
 
 async fn delete_ab_entry_pool(pool: &DbPool, entry_id: i64) -> rusqlite::Result<bool> {
-    pool_exec(
-        pool,
-        qsql!(
-            pool,
-            "DELETE FROM address_book_credentials WHERE entry_id = $1",
-            "DELETE FROM address_book_credentials WHERE entry_id = ?"
-        ),
-        &[Arg::I64(entry_id)],
-    )
-    .await
-    .map_err(map_sqlx_err)?;
-    // Personal-folder references to this shared entry go with it.
-    pool_exec(
-        pool,
-        qsql!(
-            pool,
-            "DELETE FROM user_folder_entries WHERE entry_id = $1",
-            "DELETE FROM user_folder_entries WHERE entry_id = ?"
-        ),
-        &[Arg::I64(entry_id)],
-    )
-    .await
-    .map_err(map_sqlx_err)?;
-    let changed = pool_exec(
-        pool,
-        qsql!(
-            pool,
-            "DELETE FROM address_book_entries WHERE id = $1",
-            "DELETE FROM address_book_entries WHERE id = ?"
-        ),
-        &[Arg::I64(entry_id)],
-    )
-    .await
-    .map_err(map_sqlx_err)?;
-    Ok(changed > 0)
+    // Atomic cascade (persea#342): the rusqlite path already wraps this
+    // same sequence in a transaction; the pool path must match.
+    pool_tx!(pool, |tx| async move {
+        tx.exec(
+            qsql!(
+                pool,
+                "DELETE FROM address_book_credentials WHERE entry_id = $1",
+                "DELETE FROM address_book_credentials WHERE entry_id = ?"
+            ),
+            &[Arg::I64(entry_id)],
+        )
+        .await?;
+        // Personal-folder references to this shared entry go with it.
+        tx.exec(
+            qsql!(
+                pool,
+                "DELETE FROM user_folder_entries WHERE entry_id = $1",
+                "DELETE FROM user_folder_entries WHERE entry_id = ?"
+            ),
+            &[Arg::I64(entry_id)],
+        )
+        .await?;
+        let changed = tx
+            .exec(
+                qsql!(
+                    pool,
+                    "DELETE FROM address_book_entries WHERE id = $1",
+                    "DELETE FROM address_book_entries WHERE id = ?"
+                ),
+                &[Arg::I64(entry_id)],
+            )
+            .await?;
+        Ok(changed > 0)
+    })
 }
 
 async fn store_ab_credential_pool(
@@ -10439,34 +10596,35 @@ async fn delete_local_group_pool(pool: &DbPool, id: i64) -> rusqlite::Result<Opt
     }
     .map_err(map_sqlx_err)?;
     let mappings: i64 = count.map(|r| r.get(0)).unwrap_or(0);
-    let changed = pool_exec(
-        pool,
-        qsql!(
-            pool,
-            "DELETE FROM local_groups WHERE id = $1",
-            "DELETE FROM local_groups WHERE id = ?"
-        ),
-        &[Arg::I64(id)],
-    )
-    .await
-    .map_err(map_sqlx_err)?;
-    if changed == 0 {
-        return Ok(None);
-    }
-    // SQLite runs without `PRAGMA foreign_keys`, so the ON DELETE CASCADE
-    // declared on group_mappings.group_id never fires — delete explicitly.
-    pool_exec(
-        pool,
-        qsql!(
-            pool,
-            "DELETE FROM group_mappings WHERE group_id = $1",
-            "DELETE FROM group_mappings WHERE group_id = ?"
-        ),
-        &[Arg::I64(id)],
-    )
-    .await
-    .map_err(map_sqlx_err)?;
-    Ok(Some(mappings as usize))
+    // Delete + explicit cascade must be atomic (persea#342): the rusqlite
+    // path already runs this sequence inside a transaction.
+    pool_tx!(pool, |tx| async move {
+        let changed = tx
+            .exec(
+                qsql!(
+                    pool,
+                    "DELETE FROM local_groups WHERE id = $1",
+                    "DELETE FROM local_groups WHERE id = ?"
+                ),
+                &[Arg::I64(id)],
+            )
+            .await?;
+        if changed == 0 {
+            return Ok(None);
+        }
+        // SQLite runs without `PRAGMA foreign_keys`, so the ON DELETE CASCADE
+        // declared on group_mappings.group_id never fires — delete explicitly.
+        tx.exec(
+            qsql!(
+                pool,
+                "DELETE FROM group_mappings WHERE group_id = $1",
+                "DELETE FROM group_mappings WHERE group_id = ?"
+            ),
+            &[Arg::I64(id)],
+        )
+        .await?;
+        Ok(Some(mappings as usize))
+    })
 }
 
 async fn list_provider_group_mappings_pool(
@@ -10634,7 +10792,7 @@ pub fn store_user_credentials(
             store_user_credentials_pool(pool, user_key, entries)
         });
     }
-    let conn = db.lock().unwrap();
+    let mut conn = db.lock().unwrap();
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS user_credentials (
             user_key    TEXT NOT NULL,
@@ -10644,7 +10802,10 @@ pub fn store_user_credentials(
             PRIMARY KEY (user_key, var_name)
         );",
     )?;
-    conn.execute(
+    // Atomic full replace (persea#342): partial credentials on a mid-loop
+    // failure must not survive.
+    let mut tx = conn.transaction()?;
+    tx.execute(
         "DELETE FROM user_credentials WHERE user_key = ?1",
         params![user_key],
     )?;
@@ -10654,11 +10815,12 @@ pub fn store_user_credentials(
         } else {
             encrypt(var_value)
         };
-        conn.execute(
+        tx.execute(
             "INSERT INTO user_credentials (user_key, var_name, var_value) VALUES (?1, ?2, ?3)",
             params![user_key, var_name, enc_value],
         )?;
     }
+    tx.commit()?;
     Ok(())
 }
 
@@ -10667,35 +10829,35 @@ async fn store_user_credentials_pool(
     user_key: String,
     entries: Vec<(String, String)>,
 ) -> rusqlite::Result<()> {
-    pool_exec(
-        pool,
-        qsql!(
-            pool,
-            "DELETE FROM user_credentials WHERE user_key = $1",
-            "DELETE FROM user_credentials WHERE user_key = ?"
-        ),
-        &[Arg::Str(user_key.clone())],
-    )
-    .await
-    .map_err(map_sqlx_err)?;
-    for (var_name, var_value) in entries {
-        pool_exec(
-            pool,
+    // Atomic full replace (persea#342): the delete followed by N inserts
+    // used to run bare, so a failure mid-loop left partial credentials.
+    pool_tx!(pool, |tx| async move {
+        tx.exec(
             qsql!(
                 pool,
-                "INSERT INTO user_credentials (user_key, var_name, var_value) VALUES ($1, $2, $3)",
-                "INSERT INTO user_credentials (user_key, var_name, var_value) VALUES (?, ?, ?)"
+                "DELETE FROM user_credentials WHERE user_key = $1",
+                "DELETE FROM user_credentials WHERE user_key = ?"
             ),
-            &[
-                Arg::Str(user_key.clone()),
-                Arg::Str(var_name),
-                Arg::Str(var_value),
-            ],
+            &[Arg::Str(user_key.clone())],
         )
-        .await
-        .map_err(map_sqlx_err)?;
-    }
-    Ok(())
+        .await?;
+        for (var_name, var_value) in &entries {
+            tx.exec(
+                qsql!(
+                    pool,
+                    "INSERT INTO user_credentials (user_key, var_name, var_value) VALUES ($1, $2, $3)",
+                    "INSERT INTO user_credentials (user_key, var_name, var_value) VALUES (?, ?, ?)"
+                ),
+                &[
+                    Arg::Str(user_key.clone()),
+                    Arg::Str(var_name.clone()),
+                    Arg::Str(var_value.clone()),
+                ],
+            )
+            .await?;
+        }
+        Ok(())
+    })
 }
 
 // ── Cross-module pool stores (RBAC, audit, auth providers, settings) ──
@@ -10816,29 +10978,30 @@ pub(crate) async fn rbac_delete_group_pool(
     pool: &DbPool,
     group_id: String,
 ) -> rusqlite::Result<bool> {
-    pool_exec(
-        pool,
-        qsql!(
-            pool,
-            "UPDATE rbac_groups SET parent_id = NULL WHERE parent_id = $1",
-            "UPDATE rbac_groups SET parent_id = NULL WHERE parent_id = ?"
-        ),
-        &[Arg::Str(group_id.clone())],
-    )
-    .await
-    .map_err(map_sqlx_err)?;
-    let changed = pool_exec(
-        pool,
-        qsql!(
-            pool,
-            "DELETE FROM rbac_groups WHERE id = $1",
-            "DELETE FROM rbac_groups WHERE id = ?"
-        ),
-        &[Arg::Str(group_id)],
-    )
-    .await
-    .map_err(map_sqlx_err)?;
-    Ok(changed > 0)
+    // Unparent-then-delete must be atomic (persea#342): the group row going
+    // away without the child re-parent (or vice versa) corrupts the tree.
+    pool_tx!(pool, |tx| async move {
+        tx.exec(
+            qsql!(
+                pool,
+                "UPDATE rbac_groups SET parent_id = NULL WHERE parent_id = $1",
+                "UPDATE rbac_groups SET parent_id = NULL WHERE parent_id = ?"
+            ),
+            &[Arg::Str(group_id.clone())],
+        )
+        .await?;
+        let changed = tx
+            .exec(
+                qsql!(
+                    pool,
+                    "DELETE FROM rbac_groups WHERE id = $1",
+                    "DELETE FROM rbac_groups WHERE id = ?"
+                ),
+                &[Arg::Str(group_id)],
+            )
+            .await?;
+        Ok(changed > 0)
+    })
 }
 
 pub(crate) async fn rbac_list_groups_pool(pool: &DbPool) -> rusqlite::Result<Vec<ConnectionGroup>> {
@@ -11272,23 +11435,26 @@ pub(crate) async fn rbac_create_custom_role_pool(
     permissions: Vec<String>,
 ) -> rusqlite::Result<String> {
     let id = uuid::Uuid::new_v4().to_string();
-    pool_exec(
-        pool,
-        qsql!(
-            pool,
-            "INSERT INTO custom_roles (id, name, description) VALUES ($1, $2, $3)",
-            "INSERT INTO custom_roles (id, name, description) VALUES (?, ?, ?)"
-        ),
-        &[
-            Arg::Str(id.clone()),
-            Arg::Str(name),
-            Arg::OptStr(description),
-        ],
-    )
-    .await
-    .map_err(map_sqlx_err)?;
-    rbac_insert_role_permissions_pool(pool, &id, &permissions).await?;
-    Ok(id)
+    // Role row + permission set are one logical record: insert them
+    // atomically (persea#342) so a permission failure cannot leave an
+    // empty role behind.
+    pool_tx!(pool, |tx| async move {
+        tx.exec(
+            qsql!(
+                pool,
+                "INSERT INTO custom_roles (id, name, description) VALUES ($1, $2, $3)",
+                "INSERT INTO custom_roles (id, name, description) VALUES (?, ?, ?)"
+            ),
+            &[
+                Arg::Str(id.clone()),
+                Arg::Str(name.clone()),
+                Arg::OptStr(description.clone()),
+            ],
+        )
+        .await?;
+        rbac_insert_role_permissions_pool(pool, tx, &id, &permissions).await?;
+        Ok(id)
+    })
 }
 
 pub(crate) async fn rbac_update_custom_role_pool(
@@ -11298,77 +11464,78 @@ pub(crate) async fn rbac_update_custom_role_pool(
     description: Option<String>,
     permissions: Vec<String>,
 ) -> rusqlite::Result<bool> {
-    let changed = pool_exec(
-        pool,
-        qsql!(
-            pool,
-            "UPDATE custom_roles SET name = $1, description = $2 WHERE id = $3",
-            "UPDATE custom_roles SET name = ?, description = ? WHERE id = ?"
-        ),
-        &[
-            Arg::Str(name),
-            Arg::OptStr(description),
-            Arg::Str(id.clone()),
-        ],
-    )
-    .await
-    .map_err(map_sqlx_err)?;
-    if changed == 0 {
-        return Ok(false);
-    }
-    pool_exec(
-        pool,
-        qsql!(
-            pool,
-            "DELETE FROM custom_role_permissions WHERE role_id = $1",
-            "DELETE FROM custom_role_permissions WHERE role_id = ?"
-        ),
-        &[Arg::Str(id.clone())],
-    )
-    .await
-    .map_err(map_sqlx_err)?;
-    rbac_insert_role_permissions_pool(pool, &id, &permissions).await?;
-    Ok(true)
+    // Role row + permission set are one logical record (persea#342): the
+    // delete-and-reinsert rotation of permissions must not run outside a
+    // transaction, or a failure mid-loop leaves the role with no permitted
+    // actions. A zero-row UPDATE returns Ok(false) and the (empty)
+    // transaction rolls back, exactly like the old early return did.
+    pool_tx!(pool, |tx| async move {
+        let changed = tx
+            .exec(
+                qsql!(
+                    pool,
+                    "UPDATE custom_roles SET name = $1, description = $2 WHERE id = $3",
+                    "UPDATE custom_roles SET name = ?, description = ? WHERE id = ?"
+                ),
+                &[
+                    Arg::Str(name.clone()),
+                    Arg::OptStr(description.clone()),
+                    Arg::Str(id.clone()),
+                ],
+            )
+            .await?;
+        if changed == 0 {
+            return Ok(false);
+        }
+        tx.exec(
+            qsql!(
+                pool,
+                "DELETE FROM custom_role_permissions WHERE role_id = $1",
+                "DELETE FROM custom_role_permissions WHERE role_id = ?"
+            ),
+            &[Arg::Str(id.clone())],
+        )
+        .await?;
+        rbac_insert_role_permissions_pool(pool, tx, &id, &permissions).await?;
+        Ok(true)
+    })
 }
 
 pub(crate) async fn rbac_delete_custom_role_pool(
     pool: &DbPool,
     id: String,
 ) -> rusqlite::Result<bool> {
-    pool_exec(
-        pool,
-        qsql!(
-            pool,
-            "DELETE FROM custom_role_permissions WHERE role_id = $1",
-            "DELETE FROM custom_role_permissions WHERE role_id = ?"
-        ),
-        &[Arg::Str(id.clone())],
-    )
-    .await
-    .map_err(map_sqlx_err)?;
-    pool_exec(
-        pool,
-        qsql!(
-            pool,
-            "UPDATE users SET custom_role_id = NULL WHERE custom_role_id = $1",
-            "UPDATE users SET custom_role_id = NULL WHERE custom_role_id = ?"
-        ),
-        &[Arg::Str(id.clone())],
-    )
-    .await
-    .map_err(map_sqlx_err)?;
-    let changed = pool_exec(
-        pool,
-        qsql!(
-            pool,
-            "DELETE FROM custom_roles WHERE id = $1",
-            "DELETE FROM custom_roles WHERE id = ?"
-        ),
-        &[Arg::Str(id)],
-    )
-    .await
-    .map_err(map_sqlx_err)?;
-    Ok(changed > 0)
+    pool_tx!(pool, |tx| async move {
+        tx.exec(
+            qsql!(
+                pool,
+                "DELETE FROM custom_role_permissions WHERE role_id = $1",
+                "DELETE FROM custom_role_permissions WHERE role_id = ?"
+            ),
+            &[Arg::Str(id.clone())],
+        )
+        .await?;
+        tx.exec(
+            qsql!(
+                pool,
+                "UPDATE users SET custom_role_id = NULL WHERE custom_role_id = $1",
+                "UPDATE users SET custom_role_id = NULL WHERE custom_role_id = ?"
+            ),
+            &[Arg::Str(id.clone())],
+        )
+        .await?;
+        let changed = tx
+            .exec(
+                qsql!(
+                    pool,
+                    "DELETE FROM custom_roles WHERE id = $1",
+                    "DELETE FROM custom_roles WHERE id = ?"
+                ),
+                &[Arg::Str(id)],
+            )
+            .await?;
+        Ok(changed > 0)
+    })
 }
 
 pub(crate) async fn rbac_set_user_custom_role_pool(
@@ -11609,8 +11776,12 @@ pub(crate) async fn rbac_check_group_object_permission_pool(
     Ok(row.map(|r| r.get::<bool>(0)).unwrap_or(false))
 }
 
+/// Insert the permission rows for a custom role. Called inside the
+/// caller's transaction (see [`pool_tx!`], persea#342): the role row and
+/// its permissions commit together.
 async fn rbac_insert_role_permissions_pool(
     pool: &DbPool,
+    tx: &mut PoolTx<'_>,
     role_id: &str,
     permissions: &[String],
 ) -> rusqlite::Result<()> {
@@ -11625,13 +11796,11 @@ async fn rbac_insert_role_permissions_pool(
             continue;
         }
         seen.push(permission.as_str());
-        pool_exec(
-            pool,
+        tx.exec(
             sql,
             &[Arg::Str(role_id.to_string()), Arg::Str(permission.clone())],
         )
-        .await
-        .map_err(map_sqlx_err)?;
+        .await?;
     }
     Ok(())
 }
@@ -12141,33 +12310,36 @@ pub(crate) async fn providers_move_pool(
             idx + 1
         }
     };
-    pool_exec(
-        pool,
-        &format!(
-            "UPDATE auth_providers SET position = {}, updated_at = {} WHERE id = {}",
-            ph1(pool),
-            ts_now(pool),
-            ph2(pool)
-        ),
-        &[Arg::I64(providers[neighbor_idx].position), Arg::I64(id)],
-    )
-    .await
-    .map_err(map_sqlx_err)?;
-    pool_exec(
-        pool,
-        &format!(
-            "UPDATE auth_providers SET position = {}, updated_at = {} WHERE id = {}",
-            ph1(pool),
-            ts_now(pool),
-            ph2(pool)
-        ),
-        &[
-            Arg::I64(providers[idx].position),
-            Arg::I64(providers[neighbor_idx].id),
-        ],
-    )
-    .await
-    .map_err(map_sqlx_err)?;
+    // The position swap must be atomic (persea#342): two bare UPDATEs can
+    // interleave with a concurrent move on the same two rows and produce
+    // duplicate positions (the rusqlite path already runs inside a
+    // transaction for exactly this reason).
+    pool_tx!(pool, |tx| async move {
+        tx.exec(
+            &format!(
+                "UPDATE auth_providers SET position = {}, updated_at = {} WHERE id = {}",
+                ph1(pool),
+                ts_now(pool),
+                ph2(pool)
+            ),
+            &[Arg::I64(providers[neighbor_idx].position), Arg::I64(id)],
+        )
+        .await?;
+        tx.exec(
+            &format!(
+                "UPDATE auth_providers SET position = {}, updated_at = {} WHERE id = {}",
+                ph1(pool),
+                ts_now(pool),
+                ph2(pool)
+            ),
+            &[
+                Arg::I64(providers[idx].position),
+                Arg::I64(providers[neighbor_idx].id),
+            ],
+        )
+        .await?;
+        Ok(())
+    })?;
     providers_get_pool(pool, id).await
 }
 
@@ -12533,29 +12705,30 @@ async fn delete_user_folder_pool(
     // The SQLx backends cascade on their own (folder_id FK with ON DELETE
     // CASCADE), but the explicit delete keeps behavior identical to the
     // rusqlite path, which runs without PRAGMA foreign_keys.
-    pool_exec(
-        pool,
-        qsql!(
-            pool,
-            "DELETE FROM user_folder_entries WHERE folder_id = $1 AND user_id = $2",
-            "DELETE FROM user_folder_entries WHERE folder_id = ? AND user_id = ?"
-        ),
-        &[Arg::I64(folder_id), Arg::I64(user_id)],
-    )
-    .await
-    .map_err(map_sqlx_err)?;
-    let changed = pool_exec(
-        pool,
-        qsql!(
-            pool,
-            "DELETE FROM user_folders WHERE id = $1 AND user_id = $2",
-            "DELETE FROM user_folders WHERE id = ? AND user_id = ?"
-        ),
-        &[Arg::I64(folder_id), Arg::I64(user_id)],
-    )
-    .await
-    .map_err(map_sqlx_err)?;
-    Ok(changed > 0)
+    // Entries-then-folder goes in a transaction (persea#342), matching the
+    // rusqlite path.
+    pool_tx!(pool, |tx| async move {
+        tx.exec(
+            qsql!(
+                pool,
+                "DELETE FROM user_folder_entries WHERE folder_id = $1 AND user_id = $2",
+                "DELETE FROM user_folder_entries WHERE folder_id = ? AND user_id = ?"
+            ),
+            &[Arg::I64(folder_id), Arg::I64(user_id)],
+        )
+        .await?;
+        let changed = tx
+            .exec(
+                qsql!(
+                    pool,
+                    "DELETE FROM user_folders WHERE id = $1 AND user_id = $2",
+                    "DELETE FROM user_folders WHERE id = ? AND user_id = ?"
+                ),
+                &[Arg::I64(folder_id), Arg::I64(user_id)],
+            )
+            .await?;
+        Ok(changed > 0)
+    })
 }
 
 async fn add_user_folder_entry_pool(
@@ -12788,9 +12961,11 @@ mod personal_folder_tests {
         assert!(delete_user_folder(&db, alice, fid).unwrap());
 
         // The reference is gone; the shared entry and folder survive.
-        assert!(list_user_folder_entries(&db, alice, fid)
-            .unwrap()
-            .is_empty());
+        assert!(
+            list_user_folder_entries(&db, alice, fid)
+                .unwrap()
+                .is_empty()
+        );
         let entries = list_ab_entries(&db, shared_folder).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "srv1");
@@ -12879,9 +13054,11 @@ mod personal_folder_tests {
         add_user_folder_entry(&db, alice, fid, shared_entry).unwrap();
 
         assert!(delete_ab_entry(&db, shared_entry).unwrap());
-        assert!(list_user_folder_entries(&db, alice, fid)
-            .unwrap()
-            .is_empty());
+        assert!(
+            list_user_folder_entries(&db, alice, fid)
+                .unwrap()
+                .is_empty()
+        );
         // The folder itself survives.
         assert_eq!(list_user_folders(&db, alice).unwrap().len(), 1);
     }
@@ -12923,9 +13100,11 @@ mod personal_folder_tests {
         assert_eq!(acme, vec!["Work/Acme/Prod".to_string()]);
 
         // Unknown paths have no children.
-        assert!(list_user_folder_children(&db, alice, "Nope")
-            .unwrap()
-            .is_empty());
+        assert!(
+            list_user_folder_children(&db, alice, "Nope")
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
