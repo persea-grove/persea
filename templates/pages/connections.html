@@ -420,10 +420,10 @@
                                 </div>
                                 <div class="span-2">
                                     <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
-                                        <input type="checkbox" id="em-proxmox-verify-tls" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
+                                        <input type="checkbox" id="em-proxmox-verify-tls" checked class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
                                         Verify TLS certificate
                                     </label>
-                                    <p class="text-xs text-[var(--text-muted)] mt-1">Leave unchecked if PVE uses its default self-signed certificate.</p>
+                                    <p class="text-xs text-[var(--text-muted)] mt-1">Uncheck only if PVE still uses its default self-signed certificate.</p>
                                 </div>
                             </div>
                         </details>
@@ -2722,6 +2722,9 @@
             var toggleEl = document.getElementById(entryToggleIds[t]);
             if (toggleEl) toggleEl.checked = false;
         }
+        // New entries verify TLS by default (server fallback is also true); edit mode overwrites this from the entry.
+        var pveVerifyEl = document.getElementById('em-proxmox-verify-tls');
+        if (pveVerifyEl) pveVerifyEl.checked = true;
         updateEntryTypeFields();
     }
     // Entry modal helpers: folder picker, create/edit state, credential
