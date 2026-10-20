@@ -1,6 +1,6 @@
 //! SQLite database layer for admin/API key management.
 
-use crate::audit::{AuditEvent, AuditFilters, compute_event_hash};
+use crate::audit::{compute_event_hash, AuditEvent, AuditFilters};
 use crate::auth_provider::RecheckVerdict;
 use crate::db_pool::DbPool;
 use crate::providers_db::{DbProvider, MoveDirection};
@@ -8,7 +8,7 @@ use crate::rbac::{ConnectionGroup, CustomRole, EntityType, ObjectPermission, Per
 use crate::role::role_level;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use rand::RngExt;
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
 use std::net::IpAddr;
 use std::path::Path;
@@ -955,7 +955,11 @@ pub fn rotate_key(db: &Db, name: &str) -> rusqlite::Result<Option<String>> {
         "UPDATE admins SET api_key_hash = ?1 WHERE name = ?2",
         params![key_hash, name],
     )?;
-    if changed > 0 { Ok(Some(key)) } else { Ok(None) }
+    if changed > 0 {
+        Ok(Some(key))
+    } else {
+        Ok(None)
+    }
 }
 
 #[derive(Debug)]
@@ -4317,7 +4321,7 @@ mod tests {
     fn test_hash_key_sha256() {
         let hash = hash_key("test-api-key");
         assert_eq!(hash.len(), 64); // SHA-256 = 64 hex chars
-        // Deterministic
+                                    // Deterministic
         assert_eq!(hash, hash_key("test-api-key"));
     }
 
@@ -5003,7 +5007,7 @@ mod tests {
         assert!(parse_expires_at("2030-01-01 00:00:00").is_some()); // SQLite datetime
         assert!(parse_expires_at("2030-01-01T00:00:00").is_some()); // ISO, no zone
         assert!(parse_expires_at("2030-12-31").is_some()); // bare date
-        // Garbage / empty must be None so the caller fails closed.
+                                                           // Garbage / empty must be None so the caller fails closed.
         assert!(parse_expires_at("not-a-date").is_none());
         assert!(parse_expires_at("").is_none());
         assert!(parse_expires_at("2026-13-40").is_none());
@@ -5053,16 +5057,12 @@ mod tests {
         let (_id2, _t2) = create_user_token(&db, uid, "self-service", None, None).unwrap();
         let tokens = list_user_tokens(&db, uid).unwrap();
         assert_eq!(tokens.len(), 2);
-        assert!(
-            tokens
-                .iter()
-                .any(|t| t.name == "Persea Desktop (login)" && t.token_type == "scoped")
-        );
-        assert!(
-            tokens
-                .iter()
-                .any(|t| t.name == "self-service" && t.token_type == "user")
-        );
+        assert!(tokens
+            .iter()
+            .any(|t| t.name == "Persea Desktop (login)" && t.token_type == "scoped"));
+        assert!(tokens
+            .iter()
+            .any(|t| t.name == "self-service" && t.token_type == "user"));
     }
 
     #[test]
@@ -5436,7 +5436,8 @@ fn local_group_row(row: &rusqlite::Row) -> rusqlite::Result<LocalGroup> {
 /// `allowed_groups` and its entries' `allowed_groups` (INSTR is
 /// case-sensitive, matching the exact-match semantics of
 /// `resolve_folder_access`).
-const LOCAL_GROUP_COLUMNS: &str = "lg.id, lg.name, lg.description, lg.auto_provisioned, lg.created_at, \
+const LOCAL_GROUP_COLUMNS: &str =
+    "lg.id, lg.name, lg.description, lg.auto_provisioned, lg.created_at, \
      (SELECT COUNT(*) FROM group_mappings gm WHERE gm.group_id = lg.id), \
      (SELECT COUNT(DISTINCT x.id) FROM (\
        SELECT f.id FROM address_book_folders f \
@@ -6530,7 +6531,11 @@ async fn rotate_key_pool(pool: &DbPool, name: String) -> rusqlite::Result<Option
     )
     .await
     .map_err(map_sqlx_err)?;
-    if changed > 0 { Ok(Some(key)) } else { Ok(None) }
+    if changed > 0 {
+        Ok(Some(key))
+    } else {
+        Ok(None)
+    }
 }
 
 // ── Users ─────────────────────────────────────────────────────────────
@@ -9250,7 +9255,8 @@ async fn session_activity_by_hour_pool(
          WHERE started_at >= datetime('now', ?) \
          GROUP BY hour ORDER BY hour ASC"
     );
-    let mysql_sql = "SELECT DATE_FORMAT(started_at, '%Y-%m-%d %H:00:00') AS hour, COUNT(*) AS count \
+    let mysql_sql =
+        "SELECT DATE_FORMAT(started_at, '%Y-%m-%d %H:00:00') AS hour, COUNT(*) AS count \
          FROM session_history \
          WHERE started_at >= DATE_FORMAT(UTC_TIMESTAMP() - INTERVAL ? HOUR, '%Y-%m-%d %H:%i:%s') \
          GROUP BY hour ORDER BY hour ASC";
@@ -10804,7 +10810,7 @@ pub fn store_user_credentials(
     )?;
     // Atomic full replace (persea#342): partial credentials on a mid-loop
     // failure must not survive.
-    let mut tx = conn.transaction()?;
+    let tx = conn.transaction()?;
     tx.execute(
         "DELETE FROM user_credentials WHERE user_key = ?1",
         params![user_key],
@@ -11452,7 +11458,7 @@ pub(crate) async fn rbac_create_custom_role_pool(
             ],
         )
         .await?;
-        rbac_insert_role_permissions_pool(pool, tx, &id, &permissions).await?;
+        rbac_insert_role_permissions_pool(pool, &mut tx, &id, &permissions).await?;
         Ok(id)
     })
 }
@@ -11496,7 +11502,7 @@ pub(crate) async fn rbac_update_custom_role_pool(
             &[Arg::Str(id.clone())],
         )
         .await?;
-        rbac_insert_role_permissions_pool(pool, tx, &id, &permissions).await?;
+        rbac_insert_role_permissions_pool(pool, &mut tx, &id, &permissions).await?;
         Ok(true)
     })
 }
@@ -12961,11 +12967,9 @@ mod personal_folder_tests {
         assert!(delete_user_folder(&db, alice, fid).unwrap());
 
         // The reference is gone; the shared entry and folder survive.
-        assert!(
-            list_user_folder_entries(&db, alice, fid)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(list_user_folder_entries(&db, alice, fid)
+            .unwrap()
+            .is_empty());
         let entries = list_ab_entries(&db, shared_folder).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "srv1");
@@ -13054,11 +13058,9 @@ mod personal_folder_tests {
         add_user_folder_entry(&db, alice, fid, shared_entry).unwrap();
 
         assert!(delete_ab_entry(&db, shared_entry).unwrap());
-        assert!(
-            list_user_folder_entries(&db, alice, fid)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(list_user_folder_entries(&db, alice, fid)
+            .unwrap()
+            .is_empty());
         // The folder itself survives.
         assert_eq!(list_user_folders(&db, alice).unwrap().len(), 1);
     }
@@ -13100,11 +13102,9 @@ mod personal_folder_tests {
         assert_eq!(acme, vec!["Work/Acme/Prod".to_string()]);
 
         // Unknown paths have no children.
-        assert!(
-            list_user_folder_children(&db, alice, "Nope")
-                .unwrap()
-                .is_empty()
-        );
+        assert!(list_user_folder_children(&db, alice, "Nope")
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
