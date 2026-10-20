@@ -344,6 +344,10 @@ chmod 600 "$DB_PATH" 2>/dev/null || true
 # main(), so a database they have touched is non-empty and a size check
 # below it would skip credential creation on every boot forever (#259:
 # fresh containers shipped with zero credentials).
+#
+# First-run operators read the key from /opt/persea/data/admin-key.txt
+# (docker cp or a mounted data volume). The key itself is never printed
+# to stdout, so it never shows up in container logs.
 ADMIN_KEY_FILE="/opt/persea/data/admin-key.txt"
 if [ -s "$DB_PATH" ]; then
     echo "existing database detected; skipping admin bootstrap"
