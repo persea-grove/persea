@@ -308,7 +308,7 @@ the signed response.
 | `certificate` | - | Base64-encoded SP X.509 certificate (for signing AuthnRequests). |
 | `private_key` | - | PEM-encoded SP private key (for signing AuthnRequests). |
 | `groups_attribute` | - | SAML attribute name to extract group memberships from. |
-| `strict_mode` | `true` | When true, reject responses with missing or expired assertions. |
+| `strict_mode` | `true` | Signature validation is always enforced. When true, also reject responses with missing or expired assertions (audience, recipient, and time checks); false relaxes only those checks. |
 
 ## `[auth.totp]` section
 

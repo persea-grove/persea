@@ -148,7 +148,7 @@ Optional keys:
 | `idp_metadata_file` | Local path to the IdP metadata XML (alternative to `idp_metadata_url`) |
 | `certificate` | Base64-encoded SP X.509 certificate, if you want persea to sign its login requests |
 | `private_key` | PEM private key matching `certificate` |
-| `strict_mode` | `true` (default): reject responses with missing or expired assertions |
+| `strict_mode` | `true` (default): also reject responses with missing or expired assertions (audience, recipient, time). Signatures are verified in both modes. |
 | `groups_attribute` | SAML attribute name to read group memberships from (for folder access and group-to-role mappings) |
 
 ### Verify
