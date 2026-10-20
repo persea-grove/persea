@@ -55,7 +55,10 @@ pub struct SamlConfig {
     pub private_key: Option<String>,
     /// SAML attribute name to extract group memberships from.
     pub groups_attribute: Option<String>,
-    /// When true, reject responses with missing or expired assertions.
+    /// When true, also enforce audience, recipient, and time validation
+    /// (required for SP-initiated SSO: InResponseTo must match a request we
+    /// issued). Signature validation is always enforced regardless of this
+    /// flag.
     pub strict_mode: bool,
 }
 
@@ -1212,31 +1215,43 @@ fn validate_recipient(assertion_xml: &str, acs_url: &str) -> Result<(), String> 
 }
 
 /// Parse and validate a decoded SAMLResponse XML from the ACS callback.
+///
+/// Signature validation is unconditional: every ACS response must carry a
+/// signature that verifies against the IdP certificate from the metadata,
+/// regardless of `strict_mode` (persea-grove/persea#345). Non-strict mode
+/// (IdP-initiated SSO, IdPs that omit conditions) bypasses only the
+/// audience, recipient, and time checks, never the signature. A response
+/// with no certificate to verify against fails with a clear error.
 pub fn parse_saml_response(
     xml: &str,
     config: &SamlConfig,
     idp_cert_pem: &str,
     request_id: Option<&str>,
 ) -> Result<SamlAttributes, String> {
-    // 1. Validate signature if in strict mode (obtains verified element)
-    let verified_element = if config.strict_mode && !idp_cert_pem.is_empty() {
-        Some(validate_response_signature(xml, idp_cert_pem, request_id)?)
-    } else {
-        None
-    };
+    // 1. Validate signature against the IdP cert, on every assertion, every
+    //    time. There is no configuration that accepts an unsigned or
+    //    wrongly signed response.
+    if idp_cert_pem.is_empty() {
+        return Err(
+            "SAML response rejected: no IdP certificate available to validate the response \
+             signature; check the IdP metadata"
+                .to_string(),
+        );
+    }
+    let verified_element = validate_response_signature(xml, idp_cert_pem, request_id)?;
 
-    let assertion_xml = verified_element.as_deref().unwrap_or(xml);
+    let assertion_xml = verified_element.as_str();
 
     // 2. Parse attributes from verified element (not raw document)
     let attrs = parse_assertion_xml(assertion_xml)?;
 
     // 3. Validate audience restriction against verified element
-    if config.strict_mode && !idp_cert_pem.is_empty() {
+    if config.strict_mode {
         validate_audience(assertion_xml, &config.entity_id)?;
     }
 
     // 4. Validate the Recipient against the configured ACS URL
-    if config.strict_mode && !idp_cert_pem.is_empty() {
+    if config.strict_mode {
         validate_recipient(assertion_xml, &config.acs_url)?;
     }
 
@@ -1757,15 +1772,16 @@ impl SamlProvider {
     /// Create a provider from the given config. IdP metadata loads lazily on first use.
     ///
     /// Refuses to start with `strict_mode = false` while a certificate is
-    /// configured: non-strict mode skips signature, audience, and time
-    /// validation, and a configured certificate signals a real deployment
-    /// where silently accepting unsigned responses is a security hole. Test
-    /// setups without a certificate may still use non-strict mode.
+    /// configured: non-strict mode skips audience, recipient, and time
+    /// validation (signature validation is always enforced), and a
+    /// configured certificate signals a real deployment that expects those
+    /// checks (IdP-initiated responses cannot satisfy InResponseTo).
+    /// Test setups without a certificate may still use non-strict mode.
     pub fn new(config: SamlConfig) -> Self {
         assert!(
             config.strict_mode || config.certificate.is_none(),
             "SAML strict_mode=false refused while a certificate is configured: \
-             non-strict mode skips signature, audience, and time validation; \
+             non-strict mode skips audience, recipient, and time validation; \
              remove the certificate or set strict_mode = true"
         );
         Self {
@@ -1993,6 +2009,19 @@ mod tests {
     fn parse_saml_response_missing_cert_fails() {
         let config = SamlConfig::default();
         let result = parse_saml_response("fake-response", &config, "", None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_saml_response_non_strict_still_requires_signature() {
+        // Signature validation is unconditional (persea-grove/persea#345):
+        // non-strict mode must not accept an unsigned or wrongly signed
+        // response, only skip audience/recipient/time checks.
+        let config = SamlConfig {
+            strict_mode: false,
+            ..Default::default()
+        };
+        let result = parse_saml_response("fake-response", &config, "not-a-real-cert", None);
         assert!(result.is_err());
     }
 
