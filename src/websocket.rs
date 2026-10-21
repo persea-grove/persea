@@ -285,11 +285,38 @@ struct ProxyOutcome {
     /// "Server refused connection (wrong security type?)"). Forwarded to the
     /// browser verbatim; captured here for logging and the disconnect reason.
     guacd_error: Option<String>,
+    /// True if the browser's WebSocket ended. A tab close makes the browser
+    /// half finish first and then write `disconnect` to guacd, so guacd
+    /// closes its side and the guacd→browser read sees EOF a moment later.
+    /// Whichever task wins the `select!` race decides the outcome, so the
+    /// browser-ended fact is carried here to make the classification
+    /// independent of the race.
+    browser_ended: bool,
 }
 
 #[derive(Deserialize)]
 pub struct WsQuery {
     pub token: Option<String>,
+}
+
+/// Seconds after which a guacd EOF is no longer read as a connection failure.
+const GUACD_QUICK_CLOSE_SECS: u64 = 5;
+
+/// Decide whether a finished proxy connection should be recorded as an
+/// error (as opposed to a clean disconnect).
+///
+/// A guacd EOF only means "the connection failed" if the browser was still
+/// there. When the browser went away first, persea itself wrote
+/// `disconnect` to guacd, so guacd closing its side is the expected
+/// consequence of the tab close, not a failure. The browser-ended fact is
+/// carried across the `select!` race: whichever of the two I/O tasks
+/// finished first used to decide, so a tab close was recorded as an error
+/// whenever the guacd→browser read happened to win.
+fn proxy_ended_in_error(browser_ended: bool, elapsed_secs: u64) -> bool {
+    if browser_ended {
+        return false;
+    }
+    elapsed_secs < GUACD_QUICK_CLOSE_SECS
 }
 
 /// Parts of the WS upgrade request the handler needs beyond the typed
@@ -914,6 +941,7 @@ async fn handle_ws(
     let server_disconnected = proxy_outcome.server_disconnected;
     let proxy_result = proxy_outcome.result;
     let guacd_error = proxy_outcome.guacd_error;
+    let browser_ended = proxy_outcome.browser_ended;
 
     manager.disconnect_viewer(session_id).await;
     if kind == ConnectionKind::Owner {
@@ -923,7 +951,14 @@ async fn handle_ws(
     // Log termination direction and timing
     let mark_error = match &proxy_result {
         ProxyResult::GuacdEnded(err) => {
-            if elapsed.as_secs() < 5 {
+            let is_error = proxy_ended_in_error(browser_ended, elapsed.as_secs());
+            if browser_ended {
+                tracing::info!(
+                    session_id = %session_id, client_ip = %client_addr,
+                    elapsed_secs = elapsed.as_secs(),
+                    "Proxy ended: browser closed the connection (guacd followed)"
+                );
+            } else if is_error {
                 tracing::warn!(
                     session_id = %session_id, client_ip = %client_addr,
                     elapsed_ms = elapsed.as_millis() as u64,
@@ -931,15 +966,14 @@ async fn handle_ws(
                     guacd_error = ?guacd_error,
                     "guacd closed connection quickly (possible connection failure)"
                 );
-                true // mark as error
             } else {
                 tracing::info!(
                     session_id = %session_id, client_ip = %client_addr,
                     elapsed_secs = elapsed.as_secs(),
                     "Proxy ended: guacd closed connection"
                 );
-                false
             }
+            is_error
         }
         ProxyResult::BrowserEnded(err) => {
             tracing::info!(
@@ -1082,6 +1116,15 @@ async fn proxy_ws_guacd(
     // Shared flag: set by guacd_to_ws when it sees `10.disconnect;` in the stream
     let server_disconnected = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
+    // Shared flag: set by ws_to_guacd when the browser's WebSocket ended.
+    // A tab close makes the browser half finish first and then write
+    // `disconnect` to guacd, which makes guacd close its side — so the
+    // guacd→browser read can observe EOF moments later. Whichever task
+    // wins the `select!` race decides the outcome, and a guacd EOF inside
+    // the first 5 seconds is read as "connection failure". The flag makes
+    // the browser-ended fact win regardless of who won the race.
+    let browser_ended = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
     // Captured message from guacd's `error` instruction, if any.
     let guacd_error = Arc::new(tokio::sync::Mutex::new(None::<String>));
 
@@ -1128,6 +1171,7 @@ async fn proxy_ws_guacd(
     let pending_b = pending_transfers.clone();
     let db_b = database.clone();
     let user_b = session_user.clone();
+    let be_flag = browser_ended.clone();
     let mut browser_to_guacd = tokio::spawn(async move {
         ws_to_guacd(
             ws_read,
@@ -1139,6 +1183,7 @@ async fn proxy_ws_guacd(
             db_b,
             user_b,
             read_only,
+            be_flag,
         )
         .await
     });
@@ -1206,6 +1251,7 @@ async fn proxy_ws_guacd(
         result,
         server_disconnected: server_disconnected.load(std::sync::atomic::Ordering::Relaxed),
         guacd_error: guacd_err,
+        browser_ended: browser_ended.load(std::sync::atomic::Ordering::Relaxed),
     }
 }
 
@@ -1402,6 +1448,7 @@ async fn ws_to_guacd(
     database: Option<Db>,
     session_user: Option<String>,
     read_only: bool,
+    browser_ended: Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let result = ws_to_guacd_inner(
         &mut ws_read,
@@ -1415,6 +1462,12 @@ async fn ws_to_guacd(
         read_only,
     )
     .await;
+
+    // The browser's WebSocket is done. Flag it before the disconnect write:
+    // that write makes guacd close its side, and the guacd→browser read
+    // then sees EOF. Without the flag that EOF can win the `select!` race
+    // and be misread as a connection failure.
+    browser_ended.store(true, std::sync::atomic::Ordering::Relaxed);
 
     // The browser side of this connection is done — actively end the guacd
     // side too. Previously the task simply returned and the detached
@@ -1613,6 +1666,32 @@ pub(crate) fn origin_host_matches(origin: &str, host: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_browser_close_is_never_an_error_even_when_guacd_follows_immediately() {
+        // The tab-close race: the browser half ends, persea writes
+        // `disconnect` to guacd, guacd closes, and the guacd→browser read
+        // sees EOF well inside the 5-second window. That EOF is the
+        // consequence of the tab close, not a connection failure.
+        assert!(!proxy_ended_in_error(true, 0));
+        assert!(!proxy_ended_in_error(true, 1));
+        assert!(!proxy_ended_in_error(true, 4));
+    }
+
+    #[test]
+    fn a_guacd_close_with_the_browser_still_present_is_an_error_when_quick() {
+        // The real failure case: guacd refuses the connection seconds
+        // after the handshake started.
+        assert!(proxy_ended_in_error(false, 0));
+        assert!(proxy_ended_in_error(false, 4));
+    }
+
+    #[test]
+    fn a_guacd_close_after_the_quick_window_is_not_an_error() {
+        // A session that ran and then ended normally.
+        assert!(!proxy_ended_in_error(false, 5));
+        assert!(!proxy_ended_in_error(false, 3600));
+    }
 
     #[test]
     fn origin_match_same_hostname_no_ports() {
