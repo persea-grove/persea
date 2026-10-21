@@ -11361,7 +11361,9 @@ async fn insert_pairing_pool(
 /// fall back to the legacy SQLite path. Pool-store failures are returned as
 /// errors and must NOT trigger that fallback: the record belongs in the
 /// real store.
-pub fn lookup_active_pairing(code_hash: &str) -> Option<rusqlite::Result<Option<PairingRow>>> {
+pub fn lookup_active_pairing(
+    code_hash: &str,
+) -> Option<rusqlite::Result<Option<crate::api::pairing::PairingRow>>> {
     if !pool_active() {
         return None;
     }
@@ -11437,7 +11439,7 @@ pub fn user_identity_by_id_active(
 async fn lookup_pairing_pool(
     pool: &DbPool,
     code_hash: &str,
-) -> rusqlite::Result<Option<PairingRow>> {
+) -> rusqlite::Result<Option<crate::api::pairing::PairingRow>> {
     use crate::api::pairing::PairingRow;
     use sqlx::Row as _;
     let row = match pool {
