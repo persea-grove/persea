@@ -348,7 +348,7 @@
                                         </p>
                                     </div>
                                     <button type="button" id="btn-apply-auto-size"
-                                            class="btn btn-secondary btn-sm">Apply to all RDP connections</button>
+                                            class="btn btn-danger-outline btn-sm">Overwrite all connections</button>
                                 </div>
                             </div>
                         </div>
@@ -676,8 +676,10 @@
     </div>
 </div>
 
-<!-- Apply RDP defaults: confirmation dialog. The count of entries
-     the bulk endpoint updated is shown after the request completes. -->
+<!-- Apply RDP defaults: confirmation dialog. Irreversible: no Escape or
+     scrim dismissal, Cancel takes focus on open, and the confirm button is
+     verb-labelled and filled red. The count of entries the bulk endpoint
+     updated is shown after the request completes (see the dialog body note). -->
 <div id="apply-auto-size-confirm" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="apply-auto-size-title">
     <div class="card w-full max-w-sm text-center">
         <h2 id="apply-auto-size-title" class="text-lg font-bold text-[var(--text-primary)] mb-2">Apply RDP defaults?</h2>
@@ -690,7 +692,7 @@
             <button id="apply-auto-size-cancel"
                     class="btn btn-secondary btn-sm">Cancel</button>
             <button id="apply-auto-size-ok"
-                    class="btn btn-primary btn-sm">Apply</button>
+                    class="btn btn-danger btn-sm">Overwrite all connections</button>
         </div>
     </div>
 </div>
@@ -771,7 +773,7 @@ function closeApplyDialog() {
     applyDialog.classList.add('hidden');
     applyStatus.textContent = '';
     applyOk.disabled = false;
-    applyOk.textContent = 'Apply';
+    applyOk.textContent = 'Overwrite all connections';
     applyOk.style.display = '';
     applyCancel.style.display = '';
 }
@@ -781,11 +783,14 @@ if (applyBtn) {
         applyStatus.textContent = '';
         applyStatus.className = 'text-sm mb-4';
         applyDialog.classList.remove('hidden');
+        // Cancel is the focus default: Enter must not confirm an
+        // irreversible bulk write.
+        applyCancel.focus();
     });
     applyCancel.addEventListener('click', closeApplyDialog);
     applyOk.addEventListener('click', function() {
         applyOk.disabled = true;
-        applyOk.textContent = 'Applying\u2026';
+        applyOk.textContent = 'Overwriting\u2026';
         fetch('/api/addressbook/defaults/apply', {
             method: 'PUT',
             headers: apiHeaders(),
@@ -796,19 +801,20 @@ if (applyBtn) {
         }).then(function(res) {
             if (!res.ok) {
                 applyOk.disabled = false;
-                applyOk.textContent = 'Apply';
+                applyOk.textContent = 'Overwrite all connections';
                 applyStatus.className = 'text-sm mb-4 text-red-400';
                 applyStatus.textContent = (res.data && res.data.error) || 'Failed to apply defaults.';
                 return;
             }
             var count = (res.data && typeof res.data.applied === 'number') ? res.data.applied : 0;
             applyStatus.className = 'text-sm mb-4 text-emerald-400';
-            applyStatus.textContent = 'Updated ' + count + ' connection' + (count === 1 ? '' : 's') + '.';
+            applyStatus.textContent = 'Overwrote ' + count + ' saved connection' + (count === 1 ? '' : 's') +
+                ' with the current RDP and SSH defaults.';
             applyOk.style.display = 'none';
             applyCancel.style.display = 'none';
         }).catch(function() {
             applyOk.disabled = false;
-            applyOk.textContent = 'Apply';
+            applyOk.textContent = 'Overwrite all connections';
             applyStatus.className = 'text-sm mb-4 text-red-400';
             applyStatus.textContent = 'Failed to apply defaults.';
         });
