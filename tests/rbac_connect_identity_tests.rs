@@ -12,7 +12,7 @@ use axum::routing::get;
 use axum::{middleware, Extension, Router};
 use persea::api::address_book::quick_connect;
 use persea::api::OidcEnabled;
-use persea::auth::{optional_auth, TrustedProxies};
+use persea::auth::optional_auth;
 use persea::db::{self, Db};
 use persea::rbac;
 use persea::session::SessionManager;

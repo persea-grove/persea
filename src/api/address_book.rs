@@ -1719,7 +1719,7 @@ pub async fn ab_apply_defaults(
     Json(req): Json<ApplyDefaultsRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let id = require_role(&identity, "admin")?;
-    let admin_email = stable_identity(id).into();
+    let admin_email = stable_identity(id).to_string();
 
     if !is_db_storage_available(&database) {
         return Err(AppError::Vault(
@@ -2168,7 +2168,7 @@ pub async fn ab_connect_entry(
 
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
     let client_ip_addr = client_ip(&headers, addr.ip(), &proxies);
-    let admin_name = stable_identity(id).into();
+    let admin_name = stable_identity(&id).to_string();
 
     tracing::info!(
         user = %admin_name,
@@ -2229,7 +2229,7 @@ pub async fn ab_create_folder(
     Json(req): Json<CreateFolderRequest>,
 ) -> Result<StatusCode, AppError> {
     let admin_email = match identity.as_ref() {
-        Some(Extension(id)) if id.has_role("admin") => stable_identity(id).into(),
+        Some(Extension(id)) if id.has_role("admin") => stable_identity(id).to_string(),
         Some(Extension(id))
             if rbac::identity_has_system_permission(
                 &database,
@@ -2237,7 +2237,7 @@ pub async fn ab_create_folder(
                 rbac::SystemPermission::CreateConnectionGroup,
             ) =>
         {
-            stable_identity(id).into()
+            stable_identity(id).to_string()
         }
         _ => return Err(AppError::Forbidden("admin role required".into())),
     };
@@ -2309,7 +2309,7 @@ pub async fn ab_update_folder(
     Json(req): Json<UpdateFolderRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let id = require_role(&identity, "admin")?;
-    let admin_email = stable_identity(id).into();
+    let admin_email = stable_identity(id).to_string();
 
     if !is_db_storage_available(&database) {
         return Err(AppError::Vault(
@@ -2402,7 +2402,7 @@ pub async fn ab_delete_folder(
     Path((scope, folder)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let admin_email = match identity.as_ref() {
-        Some(Extension(id)) if id.has_role("admin") => stable_identity(id).into(),
+        Some(Extension(id)) if id.has_role("admin") => stable_identity(id).to_string(),
         Some(Extension(id))
             if rbac::identity_has_object_permission(
                 &database,
@@ -2412,7 +2412,7 @@ pub async fn ab_delete_folder(
                 rbac::ObjectPermission::Delete,
             ) =>
         {
-            stable_identity(id).into()
+            stable_identity(id).to_string()
         }
         _ => return Err(AppError::Forbidden("admin role required".into())),
     };
@@ -2509,7 +2509,7 @@ pub async fn ab_create_entry(
     Json(req): Json<CreateEntryRequest>,
 ) -> Result<StatusCode, AppError> {
     let admin_email = match identity.as_ref() {
-        Some(Extension(id)) if id.has_role("admin") => stable_identity(id).into(),
+        Some(Extension(id)) if id.has_role("admin") => stable_identity(id).to_string(),
         Some(Extension(id))
             if rbac::identity_has_system_permission(
                 &database,
@@ -2517,7 +2517,7 @@ pub async fn ab_create_entry(
                 rbac::SystemPermission::CreateConnection,
             ) =>
         {
-            stable_identity(id).into()
+            stable_identity(id).to_string()
         }
         _ => return Err(AppError::Forbidden("admin role required".into())),
     };
@@ -2713,7 +2713,7 @@ pub async fn ab_update_entry(
     Json(data): Json<UpdateEntryRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let admin_email = match identity.as_ref() {
-        Some(Extension(id)) if id.has_role("admin") => stable_identity(id).into(),
+        Some(Extension(id)) if id.has_role("admin") => stable_identity(id).to_string(),
         Some(Extension(id))
             if rbac::identity_has_object_permission(
                 &database,
@@ -2723,7 +2723,7 @@ pub async fn ab_update_entry(
                 rbac::ObjectPermission::Update,
             ) =>
         {
-            stable_identity(id).into()
+            stable_identity(id).to_string()
         }
         _ => return Err(AppError::Forbidden("admin role required".into())),
     };
@@ -3013,7 +3013,7 @@ pub async fn ab_delete_entry(
     Path((scope, folder, entry)): Path<(String, String, String)>,
 ) -> Result<StatusCode, AppError> {
     let admin_email = match identity.as_ref() {
-        Some(Extension(id)) if id.has_role("admin") => stable_identity(id).into(),
+        Some(Extension(id)) if id.has_role("admin") => stable_identity(id).to_string(),
         Some(Extension(id))
             if rbac::identity_has_object_permission(
                 &database,
@@ -3023,7 +3023,7 @@ pub async fn ab_delete_entry(
                 rbac::ObjectPermission::Delete,
             ) =>
         {
-            stable_identity(id).into()
+            stable_identity(id).to_string()
         }
         _ => return Err(AppError::Forbidden("admin role required".into())),
     };
@@ -3284,7 +3284,7 @@ pub async fn quick_connect(
 
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
     let client_ip = client_ip(&headers, addr.ip(), &proxies);
-    let admin_name = stable_identity(id).into();
+    let admin_name = stable_identity(&id).to_string();
 
     if let (Some(scope), Some(folder), Some(entry)) = (
         query.scope.as_ref(),
