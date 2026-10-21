@@ -26,7 +26,7 @@ pub(crate) const GUACD_IO_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Map a guacd socket I/O error onto the join error surface.
 fn join_io_error(e: std::io::Error) -> SessionError {
-    SessionError::GuacdConnection(format!("guacd I/O error: {}", e))
+    SessionError::guacd_connection(format!("guacd I/O error: {}", e))
 }
 
 /// Manages all active sessions.
@@ -360,6 +360,30 @@ impl SessionManager {
         result
     }
 
+    /// Count live sessions: the number of in-memory sessions whose
+    /// status is Active, Pending, or Disconnected (the frontend's "live"
+    /// bucket — disconnected sessions are still within the reconnect
+    /// window). Remote HA registry sessions are included when a shared
+    /// backend pool is active.
+    ///
+    /// This is the single source of truth for "active session count"
+    /// across the API, admin, and reports surfaces, replacing the
+    /// DB-zombie-prone `SELECT COUNT(*) WHERE status='active'` that
+    /// counts rows whose status never gets cleared by crashed processes
+    /// (persea#273).
+    pub async fn active_session_count(&self) -> usize {
+        self.list_sessions()
+            .await
+            .iter()
+            .filter(|s| {
+                matches!(
+                    s.status,
+                    SessionStatus::Active | SessionStatus::Pending | SessionStatus::Disconnected
+                )
+            })
+            .count()
+    }
+
     /// Get a specific session's info: local map first, then the shared
     /// registry (remote sessions, enterprise HA only). Terminal remote
     /// sessions are reported as absent (nothing joinable remains).
@@ -599,13 +623,13 @@ impl SessionManager {
         )
         .await
         .map_err(|_| {
-            SessionError::GuacdConnection(format!(
+            SessionError::guacd_connection(format!(
                 "timeout connecting to guacd at {}",
                 self.config.guacd_addr
             ))
         })?
         .map_err(|e| {
-            SessionError::GuacdConnection(format!(
+            SessionError::guacd_connection(format!(
                 "failed to connect to guacd at {}: {}",
                 self.config.guacd_addr, e
             ))
@@ -623,23 +647,18 @@ impl SessionManager {
         }
 
         let mut stream: GuacdStream = if let Some(connector) = self.guacd_tls.as_ref() {
-            let hostname = self
-                .config
-                .guacd_addr
-                .rsplit_once(':')
-                .map(|(h, _)| h)
-                .unwrap_or(&self.config.guacd_addr);
+            let (hostname, _) = crate::net_util::split_host_port(&self.config.guacd_addr);
             let server_name =
                 tokio_rustls::rustls::pki_types::ServerName::try_from(hostname.to_string())
                     .map_err(|e| {
-                        SessionError::GuacdConnection(format!(
+                        SessionError::guacd_connection(format!(
                             "invalid TLS server name '{}': {}",
                             hostname, e
                         ))
                     })?
                     .to_owned();
             Box::new(connector.connect(server_name, tcp).await.map_err(|e| {
-                SessionError::GuacdConnection(format!("TLS handshake with guacd failed: {}", e))
+                SessionError::guacd_connection(format!("TLS handshake with guacd failed: {}", e))
             })?)
         } else {
             Box::new(tcp)
@@ -653,10 +672,10 @@ impl SessionManager {
 
         let args_instruction = Self::read_guacd_instruction(&mut stream).await?;
         if args_instruction.opcode != "args" {
-            return Err(SessionError::GuacdConnection(format!(
-                "expected 'args' from join, got '{}'",
-                args_instruction.opcode
-            )));
+            return Err(Self::unexpected_join_instruction(
+                "expected 'args' from join",
+                &args_instruction,
+            ));
         }
 
         // The connection is already configured; only the per-user
@@ -674,10 +693,10 @@ impl SessionManager {
 
         let ready = Self::read_guacd_instruction(&mut stream).await?;
         if ready.opcode != "ready" {
-            return Err(SessionError::GuacdConnection(format!(
-                "expected 'ready' from join, got '{}' (args: {:?})",
-                ready.opcode, ready.args
-            )));
+            return Err(Self::unexpected_join_instruction(
+                "expected 'ready' from join",
+                &ready,
+            ));
         }
 
         tracing::info!(
@@ -686,6 +705,19 @@ impl SessionManager {
             "Joined existing connection"
         );
         Ok(stream)
+    }
+
+    /// Map an unexpected instruction during the join handshake onto the
+    /// session error surface. When guacd sent an `error` instruction, the
+    /// typed protocol status is decoded and carried on the error
+    /// (persea#277); the rendered message keeps the same text as the
+    /// legacy prose format for display.
+    fn unexpected_join_instruction(context: &str, instruction: &Instruction) -> SessionError {
+        let (message, status) = crate::guacd::unexpected_instruction_parts(context, instruction);
+        SessionError::GuacdConnection {
+            message,
+            guacd_status: status,
+        }
     }
 
     /// Read one complete instruction from a guacd stream, bounded by
@@ -699,22 +731,22 @@ impl SessionManager {
             let n = tokio::time::timeout(GUACD_IO_TIMEOUT, stream.read(&mut buf))
                 .await
                 .map_err(|_| {
-                    SessionError::GuacdConnection(
-                        "timed out waiting for an instruction from guacd".into(),
+                    SessionError::guacd_connection(
+                        "timed out waiting for an instruction from guacd",
                     )
                 })?
                 .map_err(join_io_error)?;
             if n == 0 {
-                return Err(SessionError::GuacdConnection(
-                    "guacd closed the connection".into(),
+                return Err(SessionError::guacd_connection(
+                    "guacd closed the connection",
                 ));
             }
             let data = std::str::from_utf8(&buf[..n]).map_err(|e| {
-                SessionError::GuacdConnection(format!("invalid UTF-8 from guacd: {}", e))
+                SessionError::guacd_connection(format!("invalid UTF-8 from guacd: {}", e))
             })?;
             let results = parser.receive(data);
             if let Some(result) = results.into_iter().next() {
-                return result.map_err(|e| SessionError::GuacdConnection(e.to_string()));
+                return result.map_err(|e| SessionError::guacd_connection(e.to_string()));
             }
         }
     }
@@ -2122,5 +2154,33 @@ mod tests {
         mgr.prune_session_credentials().await;
         assert_eq!(mgr.session_credentials_len(), 0);
         assert!(mgr.session_credentials(&token, user.id).is_none());
+    }
+
+    // ── active_session_count (persea#273) ────────────────────────────
+
+    #[tokio::test]
+    async fn active_session_count_matches_live_bucket() {
+        let mgr = test_manager();
+        // Seed one session in each status and verify the count.
+        let _id_active = seed(&mgr, test_session(SessionStatus::Active)).await;
+        let _id_pending = seed(&mgr, test_session(SessionStatus::Pending)).await;
+        let id_disconnected = seed(&mgr, test_session(SessionStatus::Active)).await;
+        let id_completed = seed(&mgr, test_session(SessionStatus::Completed)).await;
+        let id_error = seed(&mgr, test_session(SessionStatus::Error)).await;
+
+        // Disconnect one session so it enters the Disconnected state.
+        mgr.disconnect_session(id_disconnected).await;
+
+        // active_session_count should return 3: Active + Pending + Disconnected.
+        let count = mgr.active_session_count().await;
+        assert_eq!(
+            count, 3,
+            "active_session_count must count Active|Pending|Disconnected"
+        );
+
+        // Terminal sessions must not inflate the count.
+        mgr.sessions.write().await.remove(&id_completed);
+        mgr.sessions.write().await.remove(&id_error);
+        assert_eq!(mgr.active_session_count().await, 3);
     }
 }

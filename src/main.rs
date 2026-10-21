@@ -29,6 +29,7 @@ mod handlers;
 mod import;
 mod metrics;
 mod migrate;
+mod net_util;
 mod oidc;
 mod password;
 mod protocol;
@@ -48,6 +49,7 @@ mod tls_gen;
 mod totp;
 mod tunnel;
 mod updates;
+mod validation;
 mod vault;
 mod vdi;
 mod vsphere;
@@ -314,6 +316,13 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+
+    /// Ensure the config file holds a `[storage].encryption_key`: an
+    /// existing key is preserved byte-for-byte, a missing or empty one is
+    /// generated and persisted atomically (file rewritten owner-only on
+    /// unix). Used by install.sh, the Docker entrypoint and the RPM/deb
+    /// postinsts instead of shell key injection. The key is never printed.
+    EnsureStorageKey,
 }
 
 #[tokio::main]
@@ -328,6 +337,22 @@ async fn main() {
 
     if cli.init {
         cmd_init();
+        return;
+    }
+
+    // ensure-storage-key must dispatch BEFORE the config load: it exists to
+    // complete or repair the config (including one a previous broken
+    // injector left with a duplicate key), and it must not open the
+    // database — the Docker entrypoint calls it ahead of the first-run
+    // admin bootstrap, which depends on the database still being untouched.
+    if let Some(Command::EnsureStorageKey) = cli.command {
+        let path = cli
+            .config
+            .clone()
+            .or_else(|| std::env::var("RUSTGUAC_CONFIG").ok())
+            .or_else(crate::config::windows_default_config_path)
+            .unwrap_or_else(|| "/opt/persea/config.toml".to_string());
+        cmd_ensure_storage_key(&path);
         return;
     }
 
@@ -408,6 +433,11 @@ async fn main() {
     // live in the app database; config-file providers still work alongside.
     crate::providers_db::migrate(&database).expect("Failed to migrate auth_providers table");
 
+    // Seed the settings flags cache so the auth middleware reads two
+    // booleans from memory instead of two spawn_blocking DB queries on
+    // every API-key request (persea#276).
+    auth::init_settings_cache(&database);
+
     // Resolve log format: CLI flag wins, then RUST_LOG_FORMAT=json env var.
     let log_format = match cli.log_format {
         LogFormat::Json => LogFormat::Json,
@@ -439,6 +469,20 @@ async fn main() {
         "vault_enabled": config.vault.is_some(),
         "db_only_mode": config.storage.as_ref().map(|st| st.backend != "vault").unwrap_or(true),
     }));
+
+    // Resolve the on-disk path the setup wizard will rewrite with the
+    // generated [storage] section and the operator-chosen listen_addr.
+    // The wizard used to read RUSTGUAC_CONFIG itself and otherwise fall
+    // through to /opt/persea/config.toml, which silently dropped the
+    // --config path the server was actually started with (persea#290).
+    // Precedence: --config > RUSTGUAC_CONFIG (if absent) > platform
+    // default.  Matches the #271 storage-key writer and
+    // docs/configuration.md:384.
+    let wizard_config_path =
+        handlers::setup::WizardConfigPath(crate::config::resolve_wizard_config_path(
+            cli.config.as_deref(),
+            std::env::var("RUSTGUAC_CONFIG").ok().as_deref(),
+        ));
 
     match cli.command {
         None | Some(Command::Serve) => {
@@ -544,6 +588,7 @@ async fn main() {
                     database.clone(),
                     log_format,
                     settings_baseline.clone(),
+                    wizard_config_path.clone(),
                 );
                 match crate::windows_service::dispatch(service_fut) {
                     Ok(()) => return,
@@ -564,7 +609,14 @@ async fn main() {
                     }
                 }
             }
-            run_server(config, database, log_format, settings_baseline).await
+            run_server(
+                config,
+                database,
+                log_format,
+                settings_baseline,
+                wizard_config_path,
+            )
+            .await
         }
         Some(Command::CreateUser {
             email,
@@ -671,6 +723,12 @@ async fn main() {
         }) => {
             migrate::cmd_vault_migrate(&config, &scope, &from, &to, users, overwrite, dry_run)
                 .await;
+        }
+        // Dispatched before the config load (see the check above the match):
+        // it completes or repairs the config file and must not touch the
+        // database, so it can run ahead of the first-run admin bootstrap.
+        Some(Command::EnsureStorageKey) => {
+            unreachable!("ensure-storage-key returns before the config load")
         }
     }
 }
@@ -893,6 +951,29 @@ fn init_data_root() -> std::path::PathBuf {
     #[cfg(not(windows))]
     {
         std::path::PathBuf::from("/opt/persea")
+    }
+}
+
+/// `ensure-storage-key`: make sure the config file holds a storage
+/// encryption key, then exit. The key itself is never printed — only
+/// whether it was already set or freshly generated.
+fn cmd_ensure_storage_key(path: &str) {
+    let had_key = crate::config::read_storage_encryption_key(path).is_some();
+    match crate::config::ensure_storage_encryption_key(path) {
+        Ok(_) => {
+            if had_key {
+                println!("storage encryption key already set in {} — preserved", path);
+            } else {
+                println!("generated storage encryption key in {}", path);
+            }
+        }
+        Err(e) => {
+            eprintln!(
+                "Error: could not ensure a storage encryption key in {}: {}",
+                path, e
+            );
+            std::process::exit(1);
+        }
     }
 }
 
@@ -1365,6 +1446,7 @@ async fn run_server(
     database: Db,
     log_format: LogFormat,
     settings_baseline: SettingsBaseline,
+    wizard_config_path: handlers::setup::WizardConfigPath,
 ) {
     // Initialize logging. RUST_LOG_FORMAT=json (or --log-format json) selects
     // JSON lines for structured log ingestion; plain fmt is the default.
@@ -1862,11 +1944,8 @@ async fn run_server(
                 // SANs always include localhost/127.0.0.1; the listen host
                 // joins them when usable (unspecified addresses fall back
                 // to localhost).
-                let bind_host = config
-                    .listen_addr
-                    .rsplit_once(':')
-                    .map(|(h, _)| h)
-                    .unwrap_or(config.listen_addr.as_str())
+                let (listen_host_raw, _) = crate::net_util::split_host_port(&config.listen_addr);
+                let bind_host = listen_host_raw
                     .trim_start_matches('[')
                     .trim_end_matches(']');
                 let hostname = match bind_host {
@@ -1981,6 +2060,29 @@ async fn run_server(
         guacd_tls,
         database.clone(),
     ));
+
+    // Close stale active-history rows from a previous unclean shutdown
+    // (persea#273): any row whose status is still 'active' with
+    // ended_at IS NULL was left behind by a crash or restart. In HA
+    // mode, rows owned by other still-live instances are excluded.
+    if let Some(db) = manager.db() {
+        let owner = if manager.ha_enabled() {
+            Some(manager.instance_id())
+        } else {
+            None
+        };
+        match crate::db::close_stale_active_history(db, owner) {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(
+                closed = n,
+                "Startup sweep: closed stale active session-history rows"
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                "Startup sweep: failed to close stale active-history rows"
+            ),
+        }
+    }
 
     // Spawn background task to reap sessions that exceed max duration or
     // have been idle past the configured idle timeout. The check interval
@@ -2607,6 +2709,7 @@ async fn run_server(
         .route("/setup", post(handlers::setup::setup_submit))
         .layer(csrf::CsrfLayer)
         .layer(Extension(setup_config))
+        .layer(Extension(wizard_config_path))
         .layer(Extension(database.clone()))
         .layer(Extension(site_title.clone()));
 
@@ -3032,6 +3135,15 @@ async fn run_server(
                 "Graceful shutdown initiated — waiting for sessions to drain"
             );
 
+            // Close every still-open session-history row so the DB
+            // converges with live state instead of leaving zombie rows
+            // with status='active' forever (persea#273).
+            if let Some(db) = shutdown_mgr.db() {
+                if let Err(e) = crate::db::close_all_open_sessions(db, "server_shutdown") {
+                    tracing::warn!(error = %e, "Shutdown: failed to close open session-history rows");
+                }
+            }
+
             handle_clone.graceful_shutdown(Some(std::time::Duration::from_secs(timeout)));
         });
 
@@ -3097,6 +3209,15 @@ async fn run_server(
                 timeout_secs = shutdown_timeout_secs,
                 "Graceful shutdown initiated — waiting for sessions to drain"
             );
+
+            // Close every still-open session-history row so the DB
+            // converges with live state instead of leaving zombie rows
+            // with status='active' forever (persea#273).
+            if let Some(db) = shutdown_mgr.db() {
+                if let Err(e) = crate::db::close_all_open_sessions(db, "server_shutdown") {
+                    tracing::warn!(error = %e, "Shutdown: failed to close open session-history rows");
+                }
+            }
 
             // 2. Give active sessions time to drain
             tokio::time::sleep(std::time::Duration::from_secs(shutdown_timeout_secs)).await;

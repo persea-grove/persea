@@ -2443,6 +2443,74 @@ pub fn end_session_history(
     Ok(())
 }
 
+/// Close every still-open session-history row (ended_at IS NULL) by
+/// marking it with a terminal status and a real duration. Called during
+/// graceful shutdown after `cancel_all_sessions()` so the DB converges
+/// with reality instead of leaving zombie rows with `status='active'`
+/// forever (persea#273).
+///
+/// `status` is the terminal status to write (e.g. `"server_shutdown"`);
+/// the duration is computed as `now - started_at` so the row carries
+/// meaningful stats even though it was interrupted.
+pub fn close_all_open_sessions(db: &Db, status: &str) -> rusqlite::Result<u64> {
+    db_route!(db, close_all_open_sessions_pool, status.to_string());
+    let conn = db.lock().unwrap();
+    // SQLite: compute duration from stored started_at; set ended_at to now.
+    // Clamp to >= 0 via MAX() to guard against clock skew or timezone drift.
+    let changed = conn.execute(
+        "UPDATE session_history
+         SET ended_at = datetime('now'),
+             duration_secs = MAX(CAST((julianday(datetime('now')) - julianday(started_at)) * 86400 AS INTEGER), 0),
+             status = ?1
+         WHERE ended_at IS NULL",
+        params![status],
+    )?;
+    Ok(changed as u64)
+}
+
+/// Startup sweep: mark every row whose `status` is still `'active'` and
+/// `ended_at IS NULL` as interrupted. These are rows left behind by a
+/// crash or unclean restart (the process died before `end_session_history`
+/// could run). The duration is clamped to >= 0.
+///
+/// In HA mode (`owner_instance` is `Some`), rows owned by another
+/// instance whose registry entry is still live are excluded: restarting
+/// instance A must not mark instance B's still-active sessions as
+/// interrupted (persea#273).
+///
+/// Called once at startup, before the reapers spawn.
+pub fn close_stale_active_history(db: &Db, owner_instance: Option<&str>) -> rusqlite::Result<u64> {
+    db_route!(
+        db,
+        close_stale_active_history_pool,
+        owner_instance.map(str::to_string)
+    );
+    let conn = db.lock().unwrap();
+    let ha_subquery = if let Some(owner) = owner_instance {
+        format!(
+            " AND NOT EXISTS (
+                SELECT 1 FROM session_registry r
+                WHERE r.session_id = session_history.session_id
+                  AND r.status NOT IN ('completed', 'error', 'expired')
+                  AND r.owner_instance != '{}'
+            )",
+            owner.replace('\'', "''")
+        )
+    } else {
+        String::new()
+    };
+    let sql = format!(
+        "UPDATE session_history
+         SET ended_at = datetime('now'),
+             duration_secs = MAX(CAST((julianday(datetime('now')) - julianday(started_at)) * 86400 AS INTEGER), 0),
+             status = 'interrupted'
+         WHERE status = 'active' AND ended_at IS NULL{}",
+        ha_subquery
+    );
+    let changed = conn.execute(&sql, [])?;
+    Ok(changed as u64)
+}
+
 /// Attach the connection reason to a session-history row (V09). Called
 /// right after `insert_session_history`; the guarded WHERE keeps the
 /// first reason written (never overwrites a user-supplied one).
@@ -5367,6 +5435,257 @@ mod tests {
             create_pending_mfa(&db, uid, "mfa@example.com", "MFA", "viewer", None, 300).unwrap();
         let pending2 = get_pending_mfa(&db, &plain2).unwrap().unwrap();
         assert!(!pending2.desktop);
+    }
+
+    // ── close_stale_active_history / close_all_open_sessions (persea#273) ──
+
+    #[test]
+    fn close_stale_active_history_marks_zombies_as_interrupted() {
+        let db = test_db();
+        // Seed a row whose status defaults to 'active' with ended_at NULL
+        // (the zombie pattern: process crashed before end_session_history ran).
+        insert_session_history(
+            &db,
+            "zombie-1",
+            "ssh",
+            "10.0.0.1",
+            Some(22),
+            "alice",
+            "Alice",
+            None,
+            None,
+            None,
+            Some("10.9.8.7"),
+        )
+        .unwrap();
+        // A second session that was properly ended: must not be touched.
+        insert_session_history(
+            &db,
+            "done-1",
+            "rdp",
+            "10.0.0.2",
+            Some(3389),
+            "bob",
+            "Bob",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        end_session_history(&db, "done-1", "completed", 120, None).unwrap();
+
+        let closed = close_stale_active_history(&db, None).unwrap();
+        assert_eq!(closed, 1, "only the zombie row should be closed");
+
+        let conn = db.lock().unwrap();
+        // The zombie row now has a terminal status and a non-NULL ended_at.
+        let (status, ended): (String, Option<String>) = conn
+            .query_row(
+                "SELECT status, ended_at FROM session_history WHERE session_id = 'zombie-1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "interrupted");
+        assert!(ended.is_some(), "ended_at must be set after the sweep");
+
+        // The properly ended row is unchanged.
+        let status2: String = conn
+            .query_row(
+                "SELECT status FROM session_history WHERE session_id = 'done-1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(status2, "completed");
+    }
+
+    #[test]
+    fn close_all_open_sessions_sets_terminal_status() {
+        let db = test_db();
+        // Seed two open sessions.
+        insert_session_history(
+            &db,
+            "open-1",
+            "ssh",
+            "10.0.0.1",
+            Some(22),
+            "alice",
+            "Alice",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        insert_session_history(
+            &db,
+            "open-2",
+            "vnc",
+            "10.0.0.2",
+            Some(5900),
+            "bob",
+            "Bob",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        // One is already closed: must not be touched.
+        insert_session_history(
+            &db,
+            "already-closed",
+            "rdp",
+            "10.0.0.3",
+            Some(3389),
+            "carol",
+            "Carol",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        end_session_history(&db, "already-closed", "completed", 60, None).unwrap();
+
+        let closed = close_all_open_sessions(&db, "server_shutdown").unwrap();
+        assert_eq!(closed, 2, "both open rows should be closed");
+
+        let conn = db.lock().unwrap();
+        let rows: Vec<(String, String, Option<String>)> = conn
+            .prepare("SELECT session_id, status, ended_at FROM session_history ORDER BY session_id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        for (sid, status, ended) in &rows {
+            if sid == "already-closed" {
+                assert_eq!(status, "completed");
+            } else {
+                assert_eq!(status, "server_shutdown");
+                assert!(ended.is_some(), "{sid} must have ended_at set");
+            }
+        }
+    }
+
+    /// HA-aware sweep: a stale active-history row whose session_id is
+    /// present in session_registry with a live status and a different
+    /// owner_instance must NOT be touched by the startup sweep
+    /// (persea#273).
+    #[test]
+    fn close_stale_active_history_skips_remote_live_sessions() {
+        let db = test_db();
+
+        // Create the session_registry table (not part of init_db; created
+        // by migrations on real databases).
+        db.lock()
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS session_registry (
+                    session_id        TEXT PRIMARY KEY,
+                    owner_instance    TEXT NOT NULL,
+                    owner_base_url    TEXT NOT NULL DEFAULT '',
+                    session_type      TEXT NOT NULL,
+                    status            TEXT NOT NULL,
+                    hostname          TEXT NOT NULL DEFAULT '',
+                    username          TEXT NOT NULL DEFAULT '',
+                    created_by        TEXT NOT NULL DEFAULT '',
+                    created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+                    last_active_at    TEXT NOT NULL DEFAULT (datetime('now')),
+                    connection_id     TEXT NOT NULL DEFAULT '',
+                    shadow_token_hash TEXT,
+                    shadow_issued_by  TEXT,
+                    shadow_expires_at TEXT
+                );",
+            )
+            .unwrap();
+
+        // Seed two active-history zombie rows.
+        insert_session_history(
+            &db,
+            "remote-live",
+            "ssh",
+            "10.0.0.1",
+            Some(22),
+            "alice",
+            "Alice",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        insert_session_history(
+            &db,
+            "orphan",
+            "vnc",
+            "10.0.0.2",
+            Some(5900),
+            "bob",
+            "Bob",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // remote-live is owned by instance-B (a different instance) and
+        // has a live registry status: the sweep must skip it.
+        db.lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO session_registry (session_id, owner_instance, session_type, status)
+             VALUES ('remote-live', 'instance-B', 'ssh', 'active')",
+                [],
+            )
+            .unwrap();
+
+        // Sweep as instance-A.
+        let closed = close_stale_active_history(&db, Some("instance-A")).unwrap();
+        assert_eq!(
+            closed, 1,
+            "only the orphan should be closed; remote-live is owned by instance-B"
+        );
+
+        let conn = db.lock().unwrap();
+        let (status, ended): (String, Option<String>) = conn
+            .query_row(
+                "SELECT status, ended_at FROM session_history WHERE session_id = 'remote-live'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            status, "active",
+            "remote-live must NOT be marked interrupted"
+        );
+        assert!(ended.is_none(), "remote-live ended_at must remain NULL");
+
+        // The orphan is closed.
+        let status2: String = conn
+            .query_row(
+                "SELECT status FROM session_history WHERE session_id = 'orphan'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(status2, "interrupted");
+
+        // Release the connection lock before re-entering the sweep: the
+        // mutex is not reentrant, and holding `conn` across the second
+        // close_stale_active_history call deadlocks the test thread.
+        drop(conn);
+
+        // Idempotency: running the sweep a second time touches nothing
+        // (the orphan's ended_at is now set, so the WHERE guard excludes it;
+        // remote-live is still skipped by the HA NOT EXISTS).
+        let closed2 = close_stale_active_history(&db, Some("instance-A")).unwrap();
+        assert_eq!(closed2, 0, "second sweep must be a no-op (idempotent)");
     }
 }
 
@@ -8410,6 +8729,90 @@ async fn end_session_history_pool(
     .await
     .map_err(map_sqlx_err)?;
     Ok(())
+}
+
+async fn close_all_open_sessions_pool(pool: &DbPool, status: String) -> rusqlite::Result<u64> {
+    let (duration_expr, max_fn) = match pool {
+        DbPool::Postgres(_) => (
+            "EXTRACT(EPOCH FROM (now() - started_at::timestamp))::bigint",
+            "GREATEST",
+        ),
+        DbPool::MySQL(_) => (
+            "TIMESTAMPDIFF(SECOND, started_at, UTC_TIMESTAMP())",
+            "GREATEST",
+        ),
+        _ => (
+            "CAST((julianday(datetime('now')) - julianday(started_at)) * 86400 AS INTEGER)",
+            "MAX",
+        ),
+    };
+    let rows = pool_exec(
+        pool,
+        &format!(
+            "UPDATE session_history SET ended_at = {}, duration_secs = {}({}, 0), status = {} WHERE ended_at IS NULL",
+            ts_now(pool), max_fn, duration_expr, ph1(pool)
+        ),
+        &[Arg::Str(status)],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    Ok(rows)
+}
+
+async fn close_stale_active_history_pool(
+    pool: &DbPool,
+    owner_instance: Option<String>,
+) -> rusqlite::Result<u64> {
+    let (duration_expr, max_fn) = match pool {
+        DbPool::Postgres(_) => (
+            "EXTRACT(EPOCH FROM (now() - started_at::timestamp))::bigint",
+            "GREATEST",
+        ),
+        DbPool::MySQL(_) => (
+            "TIMESTAMPDIFF(SECOND, started_at, UTC_TIMESTAMP())",
+            "GREATEST",
+        ),
+        _ => (
+            "CAST((julianday(datetime('now')) - julianday(started_at)) * 86400 AS INTEGER)",
+            "MAX",
+        ),
+    };
+    let ha_subquery = match (&owner_instance, pool) {
+        (Some(_), DbPool::Postgres(_)) => format!(
+            " AND NOT EXISTS (
+                SELECT 1 FROM session_registry r
+                WHERE r.session_id = session_history.session_id
+                  AND r.status NOT IN ('completed', 'error', 'expired')
+                  AND r.owner_instance != {}
+            )",
+            ph1(pool)
+        ),
+        (Some(_), _) => format!(
+            " AND NOT EXISTS (
+                SELECT 1 FROM session_registry r
+                WHERE r.session_id = session_history.session_id
+                  AND r.status NOT IN ('completed', 'error', 'expired')
+                  AND r.owner_instance != {}
+            )",
+            ph1(pool)
+        ),
+        (None, _) => String::new(),
+    };
+    let mut args = Vec::new();
+    if let Some(ref owner) = owner_instance {
+        args.push(Arg::Str(owner.clone()));
+    }
+    let rows = pool_exec(
+        pool,
+        &format!(
+            "UPDATE session_history SET ended_at = {}, duration_secs = {}({}, 0), status = 'interrupted' WHERE status = 'active' AND ended_at IS NULL{}",
+            ts_now(pool), max_fn, duration_expr, ha_subquery
+        ),
+        &args,
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    Ok(rows)
 }
 
 async fn update_session_history_reason_pool(
@@ -11984,6 +12387,7 @@ pub(crate) async fn audit_events_pool(
                     session_id: row.get(7),
                     prev_hash: row.get(8),
                     event_hash: row.get(9),
+                    username: None,
                 },
             )
         })
@@ -12064,6 +12468,7 @@ macro_rules! audit_event_row {
             session_id: $row.get(7),
             prev_hash: $row.get(8),
             event_hash: $row.get(9),
+            username: None,
         }
     }};
 }
@@ -12091,7 +12496,70 @@ pub(crate) async fn audit_list_events_pool(
         DbPool::None => return Err(no_pool_err()),
     }
     .map_err(map_sqlx_err)?;
-    Ok(rows.iter().map(|row| audit_event_row!(row)).collect())
+    let mut events: Vec<AuditEvent> = rows.iter().map(|row| audit_event_row!(row)).collect();
+
+    // Resolve usernames: fetch user names for numeric user_ids in batch.
+    let numeric_ids: Vec<i64> = events
+        .iter()
+        .filter_map(|e| e.user_id.as_ref()?.parse::<i64>().ok())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    let user_map = audit_resolve_usernames_pool(pool, &numeric_ids)
+        .await
+        .unwrap_or_default();
+    for event in &mut events {
+        if let Some(ref uid) = event.user_id {
+            event.username = if let Ok(id) = uid.parse::<i64>() {
+                Some(
+                    user_map
+                        .get(&id)
+                        .cloned()
+                        .unwrap_or_else(|| format!("deleted user #{id}")),
+                )
+            } else {
+                Some(uid.clone())
+            };
+        }
+    }
+    Ok(events)
+}
+
+/// Fetch user names for a batch of numeric user IDs.
+/// Returns a map of user_id -> name for all found users.
+pub(crate) async fn audit_resolve_usernames_pool(
+    pool: &DbPool,
+    user_ids: &[i64],
+) -> rusqlite::Result<std::collections::HashMap<i64, String>> {
+    if user_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let is_pg = matches!(pool, DbPool::Postgres(_));
+    let placeholders: Vec<String> = user_ids
+        .iter()
+        .enumerate()
+        .map(|(i, _)| placeholder(is_pg, i + 1))
+        .collect();
+    let sql = format!(
+        "SELECT id, name FROM users WHERE id IN ({})",
+        placeholders.join(", ")
+    );
+    let args: Vec<Arg> = user_ids.iter().map(|id| Arg::I64(*id)).collect();
+    let rows = match pool {
+        DbPool::Postgres(p) => pg_fetch(p, &sql, &args).await,
+        DbPool::MySQL(p) => mysql_fetch(p, &sql, &args).await,
+        DbPool::SQLite(p) => sqlite_fetch(p, &sql, &args).await,
+        DbPool::None => return Err(no_pool_err()),
+    }
+    .map_err(map_sqlx_err)?;
+    Ok(rows
+        .iter()
+        .map(|row| {
+            let id: i64 = row.get(0);
+            let name: String = row.get(1);
+            (id, name)
+        })
+        .collect())
 }
 
 pub(crate) async fn audit_count_events_pool(
@@ -12380,35 +12848,204 @@ pub async fn settings_load_all_pool(pool: &DbPool) -> rusqlite::Result<Vec<(Stri
         .collect())
 }
 
-/// Upsert system settings, one statement per pair. A failure partway
-/// through leaves the earlier pairs applied, which the settings API
-/// tolerates. Returns an error when no SQLx pool is configured.
+/// Upsert system settings, one statement per pair, then bump the settings
+/// epoch — all inside one transaction (persea#289). Committing the flag
+/// rows and the epoch together guarantees HA peers can never observe the
+/// flags without the matching epoch, so their next freshness check sees
+/// the change exactly once. Returns the new epoch value. A failure rolls
+/// the whole PUT back (previously a partial failure left the earlier pairs
+/// applied; all-or-nothing is strictly safer and the settings API tolerates
+/// both). Returns an error when no SQLx pool is configured.
 pub async fn settings_put_pool(
     pool: &DbPool,
     entries: Vec<(String, String)>,
-) -> rusqlite::Result<()> {
+) -> rusqlite::Result<i64> {
+    match pool {
+        DbPool::Postgres(pg) => {
+            let mut tx = pg.begin().await.map_err(map_sqlx_err)?;
+            for (key, value) in &entries {
+                sqlx::query(
+                    "INSERT INTO system_settings (key, value, updated_at) \
+                     VALUES ($1, $2, CURRENT_TIMESTAMP) \
+                     ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
+                )
+                .bind(key)
+                .bind(value)
+                .execute(&mut *tx)
+                .await
+                .map_err(map_sqlx_err)?;
+            }
+            // Regex guard: a non-numeric stored epoch coerces to 0
+            // (matching the MySQL/SQLite CAST semantics) instead of
+            // erroring the PUT; the RETURNING cast then reads the
+            // just-written numeric value.
+            let (epoch,): (i64,) = sqlx::query_as(
+                "INSERT INTO system_settings (key, value, updated_at) \
+                 VALUES ($1, '1', CURRENT_TIMESTAMP) \
+                 ON CONFLICT (key) DO UPDATE SET \
+                     value = CAST(CASE WHEN system_settings.value ~ '^[0-9]+$' \
+                                  THEN CAST(system_settings.value AS BIGINT) \
+                                  ELSE 0 END + 1 AS TEXT), \
+                     updated_at = CURRENT_TIMESTAMP \
+                 RETURNING CAST(value AS BIGINT)",
+            )
+            .bind(SETTINGS_EPOCH_KEY)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(map_sqlx_err)?;
+            tx.commit().await.map_err(map_sqlx_err)?;
+            Ok(epoch)
+        }
+        DbPool::MySQL(mysql) => {
+            let mut tx = mysql.begin().await.map_err(map_sqlx_err)?;
+            for (key, value) in &entries {
+                sqlx::query(
+                    "INSERT INTO system_settings (`key`, value, updated_at) \
+                     VALUES (?, ?, CURRENT_TIMESTAMP) AS new \
+                     ON DUPLICATE KEY UPDATE value = new.value, updated_at = CURRENT_TIMESTAMP",
+                )
+                .bind(key)
+                .bind(value)
+                .execute(&mut *tx)
+                .await
+                .map_err(map_sqlx_err)?;
+            }
+            sqlx::query(
+                "INSERT INTO system_settings (`key`, value, updated_at) \
+                 VALUES (?, '1', CURRENT_TIMESTAMP) \
+                 ON DUPLICATE KEY UPDATE \
+                     value = CAST(CAST(COALESCE(NULLIF(value, ''), '0') AS SIGNED) + 1 AS CHAR), \
+                     updated_at = CURRENT_TIMESTAMP",
+            )
+            .bind(SETTINGS_EPOCH_KEY)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_err)?;
+            let (epoch,): (i64,) =
+                sqlx::query_as("SELECT CAST(value AS SIGNED) FROM system_settings WHERE `key` = ?")
+                    .bind(SETTINGS_EPOCH_KEY)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(map_sqlx_err)?;
+            tx.commit().await.map_err(map_sqlx_err)?;
+            Ok(epoch)
+        }
+        DbPool::SQLite(sqlite) => {
+            let mut tx = sqlite.begin().await.map_err(map_sqlx_err)?;
+            for (key, value) in &entries {
+                sqlx::query(
+                    "INSERT INTO system_settings (key, value, updated_at) \
+                     VALUES (?, ?, CURRENT_TIMESTAMP) \
+                     ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
+                )
+                .bind(key)
+                .bind(value)
+                .execute(&mut *tx)
+                .await
+                .map_err(map_sqlx_err)?;
+            }
+            let (epoch,): (i64,) = sqlx::query_as(
+                "INSERT INTO system_settings (key, value, updated_at) \
+                 VALUES (?, '1', CURRENT_TIMESTAMP) \
+                 ON CONFLICT (key) DO UPDATE SET \
+                     value = CAST(CAST(COALESCE(NULLIF(value, ''), '0') AS INTEGER) + 1 AS TEXT), \
+                     updated_at = CURRENT_TIMESTAMP \
+                 RETURNING CAST(value AS INTEGER)",
+            )
+            .bind(SETTINGS_EPOCH_KEY)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(map_sqlx_err)?;
+            tx.commit().await.map_err(map_sqlx_err)?;
+            Ok(epoch)
+        }
+        DbPool::None => Err(no_pool_err()),
+    }
+}
+
+// ── Settings epoch (persea#289) ────────────────────────────────────────
+//
+// HA deployments share `system_settings` across instances while the auth
+// middleware caches two hot flags per process (see src/auth.rs). The
+// `settings_epoch` row is the cheap freshness signal that keeps those
+// caches coherent: the settings PUT bumps it in the same commit as the
+// flag writes, so a changed epoch guarantees the new flags are committed.
+// `key` is the table's primary key, so every read here is a single
+// indexed point lookup — no full-table scan.
+
+/// The `system_settings` row holding the monotonic settings epoch.
+const SETTINGS_EPOCH_KEY: &str = "settings_epoch";
+
+/// Parse a stored epoch value. A missing row, an empty value, or garbage
+/// all map to 0: the epoch is advisory (a wrong 0 only costs one extra
+/// cache reload), and pre-migration databases read as epoch 0.
+fn settings_epoch_from_value(raw: Option<String>) -> i64 {
+    raw.and_then(|v| v.parse::<i64>().ok()).unwrap_or_default()
+}
+
+/// Point-read the settings epoch. Missing row → `Ok(0)`; store errors
+/// surface so callers can decide (the auth middleware serves its cache
+/// rather than churning reloads while the backend is unhealthy).
+pub fn settings_epoch(db: &Db) -> rusqlite::Result<i64> {
+    db_route!(db, settings_epoch_pool);
+    let conn = db.lock().unwrap();
+    let raw = conn
+        .query_row(
+            "SELECT value FROM system_settings WHERE key = ?1",
+            params![SETTINGS_EPOCH_KEY],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+    Ok(settings_epoch_from_value(raw))
+}
+
+/// Pool variant of [`settings_epoch`]. A missing row (fresh database
+/// before any settings PUT) reads as 0.
+pub async fn settings_epoch_pool(pool: &DbPool) -> rusqlite::Result<i64> {
     let sql = qsql!(
         pool,
-        "INSERT INTO system_settings (key, value, updated_at) \
-         VALUES ($1, $2, CURRENT_TIMESTAMP) \
-         ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
-        "INSERT INTO system_settings (key, value, updated_at) \
-         VALUES (?, ?, CURRENT_TIMESTAMP) \
-         ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP"
+        "SELECT value FROM system_settings WHERE key = $1",
+        "SELECT value FROM system_settings WHERE key = ?"
     );
-    let mysql_sql = "INSERT INTO system_settings (`key`, value, updated_at) \
-         VALUES (?, ?, CURRENT_TIMESTAMP) AS new \
-         ON DUPLICATE KEY UPDATE value = new.value, updated_at = CURRENT_TIMESTAMP";
+    let mysql_sql = "SELECT value FROM system_settings WHERE `key` = ?";
     let sql = match pool {
         DbPool::MySQL(_) => mysql_sql,
         _ => sql,
     };
-    for (key, value) in entries {
-        pool_exec(pool, sql, &[Arg::Str(key), Arg::Str(value)])
-            .await
-            .map_err(map_sqlx_err)?;
+    let rows = match pool {
+        DbPool::Postgres(p) => pg_fetch(p, sql, &[Arg::Str(SETTINGS_EPOCH_KEY.to_string())]).await,
+        DbPool::MySQL(p) => mysql_fetch(p, sql, &[Arg::Str(SETTINGS_EPOCH_KEY.to_string())]).await,
+        DbPool::SQLite(p) => {
+            sqlite_fetch(p, sql, &[Arg::Str(SETTINGS_EPOCH_KEY.to_string())]).await
+        }
+        DbPool::None => return Err(no_pool_err()),
     }
-    Ok(())
+    .map_err(map_sqlx_err)?;
+    let raw = rows.first().map(|r| r.get::<String>(0));
+    Ok(settings_epoch_from_value(raw))
+}
+
+/// Bump the settings epoch row and return the new value. Called inside
+/// the settings PUT commit (rusqlite path): callers run the flag upserts
+/// and this bump in one transaction so HA peers never observe flag rows
+/// without the matching epoch. A missing row is created starting at 1.
+pub fn bump_settings_epoch_conn(conn: &Connection) -> rusqlite::Result<i64> {
+    conn.execute(
+        "INSERT INTO system_settings (key, value, updated_at)
+         VALUES (?1, '1', CURRENT_TIMESTAMP)
+         ON CONFLICT(key) DO UPDATE SET
+             value = CAST(CAST(COALESCE(NULLIF(value, ''), '0') AS INTEGER) + 1 AS TEXT),
+             updated_at = CURRENT_TIMESTAMP",
+        params![SETTINGS_EPOCH_KEY],
+    )?;
+    let raw = conn
+        .query_row(
+            "SELECT value FROM system_settings WHERE key = ?1",
+            params![SETTINGS_EPOCH_KEY],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+    Ok(settings_epoch_from_value(raw))
 }
 
 // ── Personal folders (user-scoped folder trees) ────────────────────────

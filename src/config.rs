@@ -1612,6 +1612,48 @@ pub(crate) fn windows_default_config_path() -> Option<String> {
     p.exists().then(|| p.to_string_lossy().into_owned())
 }
 
+/// Resolve the on-disk path the setup wizard should write to, given the
+/// `--config` CLI value and the value of the `RUSTGUAC_CONFIG` env var.
+///
+/// Precedence (highest wins):
+/// 1. `--config <path>` CLI argument (the file the running server actually
+///    reads; the wizard must write to the same path — #271 storage-key
+///    writer, docs/configuration.md:384).
+/// 2. `RUSTGUAC_CONFIG` environment variable (legacy name, documented in
+///    `docs/configuration.md`) — used only when `--config` is absent.
+///    Empty string is treated as unset so it cannot silently shadow
+///    `--config`.
+/// 3. Windows default (`%ProgramData%\persea\config.toml`) when it
+///    exists, matching `Config::load`'s "present means required" rule.
+/// 4. `/opt/persea/config.toml` (Linux/Docker bare-metal default).
+///
+/// Pure function of its inputs — no environment access beyond what the
+/// caller passes — so the resolution is testable in isolation. This is the
+/// fix for persea#290: the wizard used to read `RUSTGUAC_CONFIG` itself
+/// and fall through to `/opt/persea`, ignoring the path the server was
+/// actually started with.
+pub fn resolve_wizard_config_path(
+    cli_config: Option<&str>,
+    rustguac_config: Option<&str>,
+) -> PathBuf {
+    // --config wins: it is the file the server is actually reading, and
+    // the wizard must write to the same path (#271, config.md:384).
+    if let Some(p) = cli_config {
+        return PathBuf::from(p);
+    }
+    // RUSTGUAC_CONFIG only when --config is absent; empty string treated
+    // as unset so it cannot silently shadow a future --config flag.
+    if let Some(p) = rustguac_config {
+        if !p.is_empty() {
+            return PathBuf::from(p);
+        }
+    }
+    if let Some(p) = windows_default_config_path() {
+        return PathBuf::from(p);
+    }
+    PathBuf::from("/opt/persea/config.toml")
+}
+
 fn default_static_path() -> PathBuf {
     PathBuf::from("./static")
 }
@@ -2075,9 +2117,8 @@ impl Config {
             .map_err(|e| format!("invalid listen_addr '{}': {}", self.listen_addr, e))?;
 
         // guacd_addr accepts IP:port or hostname:port — validate port is numeric
-        match self.guacd_addr.rsplit(':').next() {
-            Some(port_str) if port_str.parse::<u16>().is_ok() => {}
-            _ => return Err(format!("invalid guacd_addr: {}", self.guacd_addr)),
+        if !crate::net_util::has_valid_trailing_port(&self.guacd_addr) {
+            return Err(format!("invalid guacd_addr: {}", self.guacd_addr));
         }
 
         // CIDR entries must parse
@@ -2289,11 +2330,91 @@ pub fn generate_encryption_key() -> String {
     hex::encode(buf)
 }
 
+/// Escape a value for embedding in a TOML basic string so crafted input
+/// cannot break out of the quoted literal or inject further keys.
+pub fn toml_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Read the configured storage encryption key from the TOML file at
+/// `path` with a real TOML parse: the key is found at any indentation and
+/// in either form, a `[storage]` table or an inline `storage = { .. }`
+/// table. Returns `None` when the file is missing, unparseable, or has no
+/// usable (non-empty string) `encryption_key`. Reads the file only —
+/// `PERSEA_STORAGE_KEY` is deliberately ignored, bootstrap is about the
+/// file.
+pub fn read_storage_encryption_key(path: &str) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let doc: toml::Value = toml::from_str(&content).ok()?;
+    let key = doc.get("storage")?.get("encryption_key")?.as_str()?;
+    if key.is_empty() {
+        None
+    } else {
+        Some(key.to_string())
+    }
+}
+
+/// Ensure the TOML config at `path` holds a usable storage encryption key:
+/// an existing `[storage].encryption_key` (any indentation, plain or
+/// inline table) is preserved byte-for-byte, a missing, empty, or
+/// non-string one is replaced with a freshly generated key. The single
+/// implementation behind the setup wizard and the `ensure-storage-key`
+/// CLI subcommand, which install.sh, the Docker entrypoint and the
+/// RPM/deb postinsts call instead of shell key injection. Returns the key
+/// now in effect; the key is never logged.
+pub fn ensure_storage_encryption_key(path: &str) -> std::io::Result<String> {
+    if let Some(key) = read_storage_encryption_key(path) {
+        return Ok(key);
+    }
+    // A file that parses and defines `storage` without a `[storage]`
+    // header line (inline or dotted-key table) cannot be edited by the
+    // line-based writer: appending a header would define the table twice
+    // and break the config. Fail closed instead of corrupting the file.
+    if let Ok(content) = std::fs::read_to_string(path) {
+        if storage_table_without_header(&content) {
+            return Err(std::io::Error::other(
+                "[storage] is defined as an inline table; move it to a [storage] \
+                 section so the encryption key can be managed",
+            ));
+        }
+    }
+    let key = generate_encryption_key();
+    persist_storage_encryption_key(path, &key)?;
+    Ok(key)
+}
+
+/// Whether `content` parses as TOML, defines a `storage` table, and has no
+/// `[storage]` header line — i.e. the table is inline or written with
+/// dotted keys, and the line-based writer cannot edit it.
+fn storage_table_without_header(content: &str) -> bool {
+    let doc: toml::Value = match toml::from_str(content) {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+    doc.get("storage").is_some() && !content.lines().any(storage_section_header)
+}
+
 /// Persist `key` as `[storage].encryption_key` in the TOML file at `path`,
 /// creating the file and the section when absent. An existing
-/// `encryption_key` entry in the section is replaced in place; reusing a
-/// present section keeps the file valid, since a second `[storage]` header
-/// would be a TOML error. Returns `Err` when the write fails or when a
+/// `encryption_key` entry in the section is replaced in place, and further
+/// duplicate entries (damage left by older column-0-grepping installers)
+/// are dropped, so a file a previous version corrupted becomes valid TOML
+/// again. Reusing a present section keeps the file valid, since a second
+/// `[storage]` header would be a TOML error. The write is atomic (temp
+/// file + rename) and the file ends up owner-only (0600) on unix, keeping
+/// the previous owner. Returns `Err` when the write fails or when a
 /// verification read after the write does not contain the key (a write
 /// that reports success but drops the data would lose the key on restart).
 pub fn persist_storage_encryption_key(path: &str, key: &str) -> std::io::Result<()> {
@@ -2310,10 +2431,25 @@ pub fn persist_storage_encryption_key(path: &str, key: &str) -> std::io::Result<
                 break;
             }
         }
-        lines[(hdr + 1)..section_end]
-            .iter()
-            .position(|l| l.trim().starts_with("encryption_key"))
-            .map(|off| hdr + 1 + off)
+        // The first `encryption_key` line in the section is replaced; any
+        // further ones (a duplicate key is invalid TOML) are dropped.
+        let mut first: Option<usize> = None;
+        let mut duplicates: Vec<usize> = Vec::new();
+        for (off, l) in lines[(hdr + 1)..section_end].iter().enumerate() {
+            if is_encryption_key_line(l) {
+                let off = hdr + 1 + off;
+                if first.is_none() {
+                    first = Some(off);
+                } else {
+                    duplicates.push(off);
+                }
+            }
+        }
+        // Duplicates all sort after `first`: removing them keeps its index.
+        for off in duplicates.into_iter().rev() {
+            lines.remove(off);
+        }
+        first
     } else {
         None
     };
@@ -2332,7 +2468,7 @@ pub fn persist_storage_encryption_key(path: &str, key: &str) -> std::io::Result<
 
     let mut out = lines.join("\n");
     out.push('\n');
-    std::fs::write(path, out)?;
+    write_atomic(path, out.as_bytes())?;
 
     let check = std::fs::read_to_string(path).unwrap_or_default();
     if !check.contains(&entry) {
@@ -2341,6 +2477,132 @@ pub fn persist_storage_encryption_key(path: &str, key: &str) -> std::io::Result<
         ));
     }
     Ok(())
+}
+
+/// Whether a line sets the `encryption_key` key (any indentation, and only
+/// when the key name is followed by whitespace or `=`, so a differently
+/// named key like `encryption_key_old` does not match).
+fn is_encryption_key_line(line: &str) -> bool {
+    let Some(rest) = line.trim_start().strip_prefix("encryption_key") else {
+        return false;
+    };
+    rest.starts_with('=') || rest.starts_with(char::is_whitespace)
+}
+
+/// Sequence counter for temp-file names: two writes in one process must
+/// never race on the same temp path.
+static WRITE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Atomically replace the file at `path` with `bytes`: write a temp file
+/// in the same directory (created 0600 on unix, so the key material is
+/// never briefly world-readable), restore the original file's owner when
+/// possible (a root-run repair must not strip the service account's
+/// ownership), then rename over the original. The temp file is removed
+/// when any step before the rename fails.
+fn write_atomic(path: &str, bytes: &[u8]) -> std::io::Result<()> {
+    use std::sync::atomic::Ordering;
+
+    let target = std::path::Path::new(path);
+    let dir = target
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let name = target
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "config.toml".to_string());
+    let tmp = dir.join(format!(
+        ".{}.tmp-{}-{}",
+        name,
+        std::process::id(),
+        WRITE_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+
+    let result = write_tmp_and_rename(&tmp, target, bytes);
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
+fn write_tmp_and_rename(
+    tmp: &std::path::Path,
+    target: &std::path::Path,
+    bytes: &[u8],
+) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // 0600 regardless of umask: the file holds the encryption key.
+        opts.mode(0o600);
+    }
+    {
+        let mut f = opts.open(tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+    }
+    #[cfg(unix)]
+    {
+        if let Ok(md) = std::fs::metadata(target) {
+            use std::os::unix::fs::MetadataExt;
+            let _ = std::os::unix::fs::chown(tmp, Some(md.uid()), Some(md.gid()));
+        }
+    }
+    std::fs::rename(tmp, target)
+}
+
+/// Extract the `[storage]` section (header + body) from a config file,
+/// stopping at the next table header. Returns None when the section is
+/// absent.
+fn extract_storage_section(text: &str) -> Option<String> {
+    let mut lines = text.lines();
+    lines.position(storage_section_header)?;
+    let mut section = String::from("[storage]\n");
+    for l in lines {
+        if is_table_header(l.trim()) {
+            break;
+        }
+        section.push_str(l);
+        section.push('\n');
+    }
+    Some(section)
+}
+
+/// The `[storage]` section to write into a generated config (setup
+/// wizard): the existing section verbatim when it already sets an
+/// `encryption_key` (an admin-set key must survive the wizard's rewrite,
+/// or the next boot would refuse to start), the section with a fresh key
+/// appended when it has none, and a fresh section with a new key when the
+/// config has no `[storage]` at all. The section-present check is
+/// line-based (the section text is what gets embedded); the section-absent
+/// branch consults the TOML parse, so a key in an inline
+/// `storage = { .. }` table is reused instead of defined twice.
+pub fn storage_section_for(config_path: &str) -> String {
+    let existing = std::fs::read_to_string(config_path).unwrap_or_default();
+    match extract_storage_section(&existing) {
+        Some(section) => {
+            if section.lines().any(is_encryption_key_line) {
+                section
+            } else {
+                format!(
+                    "{}\nencryption_key = \"{}\"\n",
+                    section.trim_end(),
+                    generate_encryption_key()
+                )
+            }
+        }
+        None => match read_storage_encryption_key(config_path) {
+            Some(key) => format!("[storage]\nencryption_key = \"{}\"\n", toml_escape(&key)),
+            None => format!(
+                "[storage]\nencryption_key = \"{}\"\n",
+                generate_encryption_key()
+            ),
+        },
+    }
 }
 
 /// Whether a line is the `[storage]` table header (allowing a trailing
@@ -3161,5 +3423,60 @@ mod tests {
             config.effective_recording_path(),
             std::path::Path::new(&default_recording_path())
         );
+    }
+
+    /// `resolve_wizard_config_path` — pure resolution with documented
+    /// precedence. Matches the #271 storage-key writer and
+    /// docs/configuration.md:384: --config is the canonical file.
+    #[test]
+    fn resolve_wizard_config_path_prefers_cli_over_env() {
+        // #271 consistency: --config is the file the server reads, so the
+        // wizard must write to it even when RUSTGUAC_CONFIG differs.
+        let p =
+            resolve_wizard_config_path(Some("/etc/persea/cli.toml"), Some("/etc/persea/env.toml"));
+        assert_eq!(p, std::path::PathBuf::from("/etc/persea/cli.toml"));
+    }
+
+    #[test]
+    fn resolve_wizard_config_path_uses_env_when_cli_unset() {
+        let p = resolve_wizard_config_path(None, Some("/etc/persea/env.toml"));
+        assert_eq!(p, std::path::PathBuf::from("/etc/persea/env.toml"));
+    }
+
+    #[test]
+    fn resolve_wizard_config_path_uses_cli_when_env_unset() {
+        let p = resolve_wizard_config_path(Some("/etc/persea/cli.toml"), None);
+        assert_eq!(p, std::path::PathBuf::from("/etc/persea/cli.toml"));
+    }
+
+    #[test]
+    fn resolve_wizard_config_path_treats_empty_env_as_unset() {
+        // Empty string must not shadow --config. The env is present but
+        // blank, which is indistinguishable from "operator didn't set it".
+        let p = resolve_wizard_config_path(Some("/etc/persea/cli.toml"), Some(""));
+        assert_eq!(p, std::path::PathBuf::from("/etc/persea/cli.toml"));
+    }
+
+    #[test]
+    fn resolve_wizard_config_path_empty_env_falls_through_to_opt() {
+        // Empty env + no CLI → bare-metal default.
+        let p = resolve_wizard_config_path(None, Some(""));
+        assert_eq!(p, std::path::PathBuf::from("/opt/persea/config.toml"));
+    }
+
+    #[test]
+    fn resolve_wizard_config_path_falls_back_to_opt_when_nothing_set() {
+        // No CLI, no env, no Windows default (CI on Linux). Must fall
+        // through to the bare-metal /opt/persea default.
+        let p = resolve_wizard_config_path(None, None);
+        assert_eq!(p, std::path::PathBuf::from("/opt/persea/config.toml"));
+    }
+
+    #[test]
+    fn resolve_wizard_config_path_uses_cli_over_default() {
+        // Crucial regression: when the server was started with
+        // `--config foo.toml` and the wizard used to ignore it.
+        let p = resolve_wizard_config_path(Some("config.local.toml"), None);
+        assert_eq!(p, std::path::PathBuf::from("config.local.toml"));
     }
 }

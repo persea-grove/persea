@@ -170,6 +170,14 @@ pub fn normalize_host_key(expected: &str) -> Result<String, String> {
     fingerprint_openssh_key(trimmed)
 }
 
+/// Split the stored `jump_host` ("host" or "host:port") into its parts,
+/// defaulting the port to 22 exactly as the pasted snippets did. Delegates
+/// the cut to the shared last-colon splitter.
+fn split_jump_host(jump_host: &str) -> (&str, u16) {
+    let (host, port) = crate::net_util::split_host_port(jump_host);
+    (host, crate::net_util::parse_port(port).unwrap_or(22))
+}
+
 /// Read the known_hosts file and return the pinned fingerprint for `host:port`,
 /// or `None` if the host is not yet pinned.
 fn read_known_hosts(path: &std::path::Path, host: &str, port: u16) -> Option<String> {
@@ -218,23 +226,6 @@ struct TunnelHandler {
     known_hosts_path: Option<PathBuf>,
 }
 
-impl TunnelHandler {
-    /// Split the `host:port` this hop connects to.
-    ///
-    /// Host parsing is heuristic (an `rfind(':')` split misreads bare IPv6
-    /// literals), but read and append both go through this helper, so a pin
-    /// and its later lookup always resolve to the same known_hosts row.
-    fn host_and_port(&self) -> (&str, u16) {
-        match self.jump_host.rfind(':') {
-            Some(pos) => (
-                &self.jump_host[..pos],
-                self.jump_host[pos + 1..].parse().unwrap_or(22),
-            ),
-            None => (self.jump_host.as_str(), 22),
-        }
-    }
-}
-
 impl client::Handler for TunnelHandler {
     type Error = russh::Error;
 
@@ -252,7 +243,7 @@ impl client::Handler for TunnelHandler {
             Some(expected.clone())
         } else {
             self.known_hosts_path.as_ref().and_then(|path| {
-                let (host, port) = self.host_and_port();
+                let (host, port) = split_jump_host(&self.jump_host);
                 read_known_hosts(path, host, port)
             })
         };
@@ -263,7 +254,7 @@ impl client::Handler for TunnelHandler {
             // Both paths below fail closed: a key that has never been
             // verified must not pass unless the verification can be recorded
             // for the next connection.
-            let (host, port) = self.host_and_port();
+            let (host, port) = split_jump_host(&self.jump_host);
             let Some(ref path) = self.known_hosts_path else {
                 tracing::error!(
                     hop = self.hop_index,
@@ -665,6 +656,29 @@ mod tests {
     #[test]
     fn default_port_is_22() {
         assert_eq!(default_ssh_port(), 22);
+    }
+
+    #[test]
+    fn split_jump_host_bracketed_ipv6() {
+        // Bracketed IPv6 endpoints survive the last-colon split with the
+        // brackets intact, on both sides of the port.
+        assert_eq!(split_jump_host("[::1]:22"), ("[::1]", 22));
+        assert_eq!(
+            split_jump_host("[2001:db8::1]:2222"),
+            ("[2001:db8::1]", 2222)
+        );
+    }
+
+    #[test]
+    fn split_jump_host_plain_and_default() {
+        assert_eq!(
+            split_jump_host("bastion.example.com:2222"),
+            ("bastion.example.com", 2222)
+        );
+        assert_eq!(
+            split_jump_host("bastion.example.com"),
+            ("bastion.example.com", 22)
+        );
     }
 
     #[test]

@@ -4,7 +4,7 @@
 //! (guacd, database, db pool, vault, disk). The remaining handlers require
 //! operator or higher, with the status and audit views reserved for admins.
 use super::{AppState, DriveConfigured, OidcEnabled, SiteTitle, ThemeData, VaultConfigured};
-use crate::auth::{AuthIdentity, WsTicketStore};
+use crate::auth::{require_role, AuthIdentity, WsTicketStore};
 use crate::db::Db;
 use crate::error::AppError;
 use axum::extract::State;
@@ -174,12 +174,10 @@ pub async fn health(
         }),
     );
 
-    // Count active sessions
-    let sessions = state.list_sessions().await;
-    let active_sessions = sessions
-        .iter()
-        .filter(|s| s.status == crate::session::SessionStatus::Active)
-        .count();
+    // Count live sessions from the in-memory manager (single source of
+    // truth; replaces the DB-row count that included zombie rows from
+    // crashed processes — persea#273).
+    let active_sessions = state.active_session_count().await;
 
     let status = if checks.values().all(|c| {
         matches!(
@@ -221,13 +219,7 @@ pub async fn system_status(
     Extension(database): Extension<Db>,
     Extension(vault_configured): Extension<VaultConfigured>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let version = env!("CARGO_PKG_VERSION");
 
@@ -249,11 +241,10 @@ pub async fn system_status(
     .await
     .unwrap_or((0.0, 0, 0.0));
 
+    // Use the in-memory manager as the single source of truth for live
+    // session counts (persea#273).
+    let active_sessions = manager.active_session_count().await;
     let sessions = manager.list_sessions().await;
-    let active_sessions = sessions
-        .iter()
-        .filter(|s| s.status == crate::session::SessionStatus::Active)
-        .count();
     let pending_sessions = sessions
         .iter()
         .filter(|s| s.status == crate::session::SessionStatus::Pending)
@@ -448,13 +439,7 @@ include!(concat!(env!("OUT_DIR"), "/docs-rendered.rs"));
 pub async fn get_docs(
     identity: Option<Extension<AuthIdentity>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
     let sections: Vec<serde_json::Value> = DOCS
         .iter()
         .map(|(slug, title, html, _)| json!({ "slug": slug, "title": title, "html": html }))
@@ -468,13 +453,7 @@ pub async fn get_docs(
 pub async fn metrics(
     identity: Option<Extension<AuthIdentity>>,
 ) -> Result<impl IntoResponse, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
     Ok((
         StatusCode::OK,
         [("Content-Type", "text/plain; version=0.0.4")],
@@ -488,13 +467,7 @@ pub async fn audit_events(
     Extension(database): Extension<Db>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let limit = params
         .get("limit")
@@ -524,16 +497,26 @@ pub async fn audit_events(
             &event.event_hash
         };
         let short_hash_display = format!("{short_hash}…");
-        let details = if event.details.is_null() {
-            "-".to_string()
-        } else if let Some(obj) = event.details.as_object() {
-            obj.iter()
-                .map(|(k, v)| format!("{}: {}", k, v))
-                .collect::<Vec<_>>()
-                .join(", ")
-        } else {
-            event.details.to_string()
-        };
+
+        // Format timestamp: "YYYY-MM-DD HH:MM:SS" for human readability.
+        // Nanosecond precision stays in the CSV export only.
+        let formatted_timestamp = event.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
+
+        // Username: use the resolved username from the DB join. Fall back
+        // to raw user_id for non-numeric values (e.g. "admin", "-") or
+        // to "-" when user_id is absent.
+        let display_user = event
+            .username
+            .as_deref()
+            .or(event.user_id.as_deref())
+            .unwrap_or("-");
+        let raw_user_id = event.user_id.as_deref().unwrap_or("-");
+
+        // Structured details: render key/value pairs as a vertical list.
+        // Long values (IDs, hashes) are clamped via CSS ellipsis + title
+        // tooltip for full value. Raw fallback when unparseable.
+        let details_html = build_details_html(&event.details);
+
         let outcome_class = match event.outcome.as_str() {
             "failure" | "error" => "bg-red-900/50 text-red-300 border-red-800",
             _ => "bg-emerald-900/50 text-emerald-300 border-emerald-800",
@@ -541,32 +524,32 @@ pub async fn audit_events(
         // Every interpolated value is escaped: `user_id` is attacker-
         // controlled (session rows store the caller's display name) and
         // this fragment is swapped into the admin page via innerHTML.
-        let escaped_timestamp = html_escape(&event.timestamp.to_rfc3339());
+        let escaped_timestamp = html_escape(&formatted_timestamp);
         let escaped_type = html_escape(&event.event_type);
-        let escaped_user = html_escape(event.user_id.as_deref().unwrap_or("-"));
+        let escaped_user = html_escape(display_user);
+        let escaped_raw_uid = html_escape(raw_user_id);
         let escaped_ip = html_escape(event.source_ip.as_deref().unwrap_or("-"));
         let escaped_outcome = html_escape(&event.outcome);
-        let escaped_details = html_escape(&details);
         let escaped_hash = html_escape(&event.event_hash);
         let escaped_short_hash = html_escape(&short_hash_display);
         html.push_str(&format!(
             r#"<tr class="hover:bg-[var(--bg-hover)]/50">
 <td class="px-4 py-3 text-sm text-[var(--text-muted)] whitespace-nowrap">{}</td>
 <td class="px-4 py-3 text-sm text-[var(--text-primary)]">{}</td>
-<td class="px-4 py-3 text-sm text-[var(--text-muted)]">{}</td>
+<td class="px-4 py-3 text-sm text-[var(--text-muted)]" title="user_id: {}">{}</td>
 <td class="px-4 py-3 text-sm text-[var(--text-muted)]">{}</td>
 <td class="px-4 py-3"><span class="inline-block px-2 py-0.5 text-xs rounded border {}">{}</span></td>
-<td class="px-4 py-3 text-sm text-[var(--text-muted)] max-w-xs truncate" title="{}">{}</td>
+<td class="px-4 py-3 text-sm text-[var(--text-muted)] max-w-xs">{}</td>
 <td class="px-4 py-3 text-sm text-[var(--text-muted)] font-mono text-right" title="{}">{}</td>
 </tr>"#,
             escaped_timestamp,
             escaped_type,
+            escaped_raw_uid,
             escaped_user,
             escaped_ip,
             outcome_class,
             escaped_outcome,
-            escaped_details,
-            escaped_details,
+            details_html,
             escaped_hash,
             escaped_short_hash,
         ));
@@ -597,13 +580,7 @@ pub async fn audit_verify(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let verification =
         tokio::task::spawn_blocking(move || crate::audit::verify_chain(&database, None, None))
@@ -632,13 +609,7 @@ pub async fn audit_export(
     Extension(database): Extension<Db>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let filters = crate::audit::AuditFilters {
         user_id: params.get("user").cloned().filter(|s| !s.is_empty()),
@@ -697,6 +668,48 @@ fn html_escape(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
+}
+
+/// Render audit details as structured HTML: key/value rows with clamped
+/// long values (CSS ellipsis) and a title tooltip for the full value.
+/// Falls back to the raw escaped string when details are not a JSON object.
+fn build_details_html(details: &serde_json::Value) -> String {
+    if details.is_null() {
+        return html_escape("-");
+    }
+    if let Some(obj) = details.as_object() {
+        if obj.is_empty() {
+            return html_escape("-");
+        }
+        let mut out = String::from("<div class=\"space-y-0.5\">");
+        for (k, v) in obj {
+            let val_str = if v.is_string() {
+                v.as_str().unwrap_or("").to_string()
+            } else {
+                v.to_string()
+            };
+            let escaped_key = html_escape(k);
+            let escaped_val = html_escape(&val_str);
+            // Values over 64 chars (IDs, hashes, long paths) get clamped.
+            // The title attribute recovers the full value as a tooltip.
+            if val_str.len() > 64 {
+                out.push_str(&format!(
+                    r#"<div class="flex gap-2 text-xs leading-5"><span class="text-[var(--text-muted)] shrink-0">{}:</span><span class="text-[var(--text-secondary)] truncate max-w-[280px]" title="{}">{}</span></div>"#,
+                    escaped_key, escaped_val, escaped_val,
+                ));
+            } else {
+                out.push_str(&format!(
+                    r#"<div class="flex gap-2 text-xs leading-5"><span class="text-[var(--text-muted)] shrink-0">{}:</span><span class="text-[var(--text-secondary)]">{}</span></div>"#,
+                    escaped_key, escaped_val,
+                ));
+            }
+        }
+        out.push_str("</div>");
+        return out;
+    }
+    // Non-object details (array or primitive): show as raw escaped string.
+    html_escape(&details.to_string())
 }
 
 // ── TLS certificate metadata (Security page) ───────────────────────────────
@@ -779,13 +792,7 @@ pub async fn tls_cert_info(
     Extension(database): Extension<Db>,
     identity: Option<Extension<AuthIdentity>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
     // Resolve the paths server-side from the stored settings: the client
     // never supplies file paths (no arbitrary-file oracle).
     let db = database.clone();
@@ -942,7 +949,7 @@ mod tests {
             "event_type must be escaped: {html}"
         );
         assert!(
-            html.contains("failure'&gt;&lt;script&gt;alert(1)&lt;/script&gt;"),
+            html.contains("failure&#x27;&gt;&lt;script&gt;alert(1)&lt;/script&gt;"),
             "outcome must be escaped: {html}"
         );
         assert!(

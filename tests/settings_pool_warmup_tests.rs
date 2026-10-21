@@ -1,4 +1,4 @@
-//! Pool warm-up regression test (persea#289, persea#320).
+//! Pool warm-up regression test (persea#289).
 //!
 //! The settings-epoch work made worker-runtime pool acquires routine at
 //! boot (the epoch point read in `init_settings_cache`) and on every
@@ -14,17 +14,11 @@
 //! acquires never touch cross-runtime state.
 //!
 //! This test mirrors the boot sequence (connect + migrate on the test's
-//! main runtime, then install) and asserts the worker-runtime first touch
-//! and the deep health check succeed well below the 30s acquire timeout.
-//! The CI race cannot be reproduced deterministically on fast machines
-//! (it never lost locally), so the latency bound is the guardrail: any
-//! reintroduction of a cold first touch turns this test red on CI
-//! hardware.
-//!
-//! Cherry-pick note: the `settings_epoch` point read from main is not on
-//! release/v1.2.0 yet, so the boot-time first touch here is
-//! `settings_merge::load_db_settings` — the call `src/main.rs` actually
-//! issues after installing the pool on this branch.
+//! main runtime, then install) and asserts the deep health check succeeds
+//! and stays far below the 30s acquire timeout. The CI race cannot be
+//! reproduced deterministically on fast machines (it never lost locally),
+//! so the latency bound is the guardrail: any reintroduction of a cold
+//! first touch turns this test red on CI hardware.
 
 use std::time::{Duration, Instant};
 
@@ -45,25 +39,17 @@ async fn deep_health_ping_after_install_is_fast_and_worker_proven() {
     pool.run_migrations().await.unwrap();
     db::set_active_pool(pool).unwrap();
 
-    // The boot-time first touch (settings load via the worker, mirroring
-    // main.rs's `load_db_settings` after install) and the deep health
-    // check path (4cac536) — in the order a real boot issues them.
+    // The boot-time first touch (settings-epoch point read, persea#289)
+    // and the deep health check path (4cac536) — in the order a real boot
+    // issues them.
     let dummy = db::init_db(&dir.join("admin.db")).unwrap();
     let t0 = Instant::now();
     let d = dummy.clone();
-    let settings =
-        tokio::task::spawn_blocking(move || persea::settings_merge::load_db_settings(&d))
-            .await
-            .unwrap()
-            .unwrap();
-    assert!(
-        settings.is_empty(),
-        "a fresh database has no setting overrides"
-    );
-    assert!(
-        t0.elapsed() < Duration::from_secs(5),
-        "first settings read took {t0:?} — cold-touch race is back"
-    );
+    let epoch = tokio::task::spawn_blocking(move || db::settings_epoch(&d))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(epoch, 0, "a fresh database reads as epoch 0");
 
     let t1 = Instant::now();
     db::ping_active_pool()

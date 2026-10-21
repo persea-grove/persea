@@ -28,12 +28,64 @@ pub enum SessionType {
     Proxmox,
 }
 
+impl SessionType {
+    /// Every variant's wire/API string, in declaration order. The CSV
+    /// importer iterates this list (plus the `powershell` alias) to
+    /// validate user-supplied protocol strings; the rest of the crate
+    /// uses the order here as the canonical protocol order.
+    pub const ALL: [&'static str; 7] = ["ssh", "web", "rdp", "vnc", "vdi", "spice", "proxmox"];
+
+    /// Stable wire/API string for each variant (`"ssh"`, `"web"`, ...).
+    /// Round-trips through [`from_api_str`] for every variant.
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            SessionType::Ssh => "ssh",
+            SessionType::Web => "web",
+            SessionType::Rdp => "rdp",
+            SessionType::Vnc => "vnc",
+            SessionType::Vdi => "vdi",
+            SessionType::Spice => "spice",
+            SessionType::Proxmox => "proxmox",
+        }
+    }
+
+    /// Parse a protocol string the API speaks. Recognises every
+    /// [`SessionType::ALL`] variant plus the `"powershell"` alias
+    /// (PowerShell-over-SSH is a separate address-book entry type, but
+    /// it rides the SSH session kind). Unknown strings yield
+    /// `default`, so each caller controls whether an unknown protocol
+    /// is silently coerced to its preferred fallback (vsphere defaults
+    /// to Vnc) or rejected upstream (address-book returns
+    /// `UnknownSessionType`).
+    pub fn from_api_str(s: &str, default: SessionType) -> SessionType {
+        Self::from_api_str_opt(s).unwrap_or(default)
+    }
+
+    /// Strict variant of [`from_api_str`]: returns `None` on unknown
+    /// input so callers that need an error path (address-book quick
+    /// connect, `params_from_entry`) can preserve their existing
+    /// "unknown protocol" semantics without rebuilding the
+    /// string-cascade themselves.
+    pub fn from_api_str_opt(s: &str) -> Option<SessionType> {
+        Some(match s {
+            "ssh" | "powershell" => SessionType::Ssh,
+            "web" => SessionType::Web,
+            "rdp" => SessionType::Rdp,
+            "vnc" => SessionType::Vnc,
+            "vdi" => SessionType::Vdi,
+            "spice" => SessionType::Spice,
+            "proxmox" => SessionType::Proxmox,
+            _ => return None,
+        })
+    }
+}
+
 /// SSH-specific session parameters.
 ///
 /// Deserialized from the flat request JSON via `#[serde(flatten)]` on
 /// `CreateSessionRequest`: any JSON key declared only here lands in this
 /// struct regardless of `session_type`.
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SshParams {
     /// PEM-encoded private key for key-based auth instead of a password.
     pub private_key: Option<String>,
@@ -45,7 +97,7 @@ pub struct SshParams {
 }
 
 /// RDP-specific session parameters (NLA, RemoteApp, GFX pipeline, ...).
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RdpParams {
     /// Windows domain for the login user (NTLM/Kerberos).
     pub domain: Option<String>,
@@ -85,14 +137,14 @@ pub struct RdpParams {
 /// `color_depth` is also honoured by SPICE sessions (shared display option);
 /// this struct is its canonical flattened home — serde flatten claims a key
 /// once, in declaration order, so the key must not be duplicated elsewhere.
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VncParams {
     /// Color depth in bits per pixel (also honoured by SPICE sessions).
     pub color_depth: Option<u8>,
 }
 
 /// Web-browser session parameters (Xvnc + Chromium).
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WebParams {
     /// URL the browser session starts on.
     pub url: Option<String>,
@@ -106,7 +158,7 @@ pub struct WebParams {
 }
 
 /// VDI (Docker desktop container) session parameters.
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VdiParams {
     /// Docker image for VDI sessions (e.g. "myregistry/desktop:latest").
     pub container_image: Option<String>,
@@ -128,7 +180,7 @@ pub struct VdiParams {
 }
 
 /// SPICE-specific session parameters (TLS, CA verification, proxy).
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SpiceParams {
     /// SPICE: connect using TLS.
     pub spice_tls: Option<bool>,
@@ -144,7 +196,7 @@ pub struct SpiceParams {
 }
 
 /// Proxmox VE console session parameters (SPICE brokered via PVE spiceproxy).
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProxmoxParams {
     /// PVE API base URL, a full URL including scheme and port
     /// (e.g. "https://pve.example.com:8006"). persea fetches a just-in-time
@@ -598,8 +650,19 @@ impl ShareTokenValidation {
 #[derive(Debug)]
 #[must_use]
 pub enum SessionError {
-    /// Could not reach guacd, or the handshake failed; carries the underlying message.
-    GuacdConnection(String),
+    /// Could not reach guacd, or the handshake failed; carries the
+    /// underlying message for display. When guacd rejected the handshake
+    /// with an `error` instruction, the protocol status code travels as
+    /// typed data ([`GuacdStatus`], persea#277) so classification never
+    /// depends on the message prose; `guacd_status` is `None` for
+    /// TCP/TLS/timeout/parse failures where guacd said nothing.
+    GuacdConnection {
+        /// Human-readable message, for display only.
+        message: String,
+        /// Typed guacd protocol status decoded from the `error`
+        /// instruction, when guacd sent one.
+        guacd_status: Option<crate::guacd::GuacdStatus>,
+    },
     /// No session with the requested id exists.
     NotFound,
     /// The session exists but is not in a joinable state.
@@ -620,10 +683,50 @@ pub enum SessionError {
     VdiError(String),
 }
 
+impl SessionError {
+    /// Build a guacd-connection failure with no protocol status: TCP
+    /// timeouts, TLS failures, and parse errors — paths where guacd sent
+    /// no `error` instruction.
+    pub fn guacd_connection(message: impl Into<String>) -> SessionError {
+        SessionError::GuacdConnection {
+            message: message.into(),
+            guacd_status: None,
+        }
+    }
+
+    /// Map a [`crate::guacd::GuacdError`] onto the session error surface.
+    /// The rendered message is exactly the underlying error's `Display`;
+    /// a typed protocol status is carried through when guacd rejected
+    /// the handshake with an `error` instruction (persea#277).
+    pub fn from_guacd_error(e: &crate::guacd::GuacdError) -> SessionError {
+        let guacd_status = match e {
+            crate::guacd::GuacdError::ErrorInstruction { status, .. } => *status,
+            _ => None,
+        };
+        SessionError::GuacdConnection {
+            message: e.to_string(),
+            guacd_status,
+        }
+    }
+
+    /// The typed guacd protocol status for this failure: present only
+    /// when guacd sent an `error` instruction carrying a parseable
+    /// status code. Callers classify on this field, never on message
+    /// text (persea#277).
+    pub fn guacd_status(&self) -> Option<crate::guacd::GuacdStatus> {
+        match self {
+            SessionError::GuacdConnection { guacd_status, .. } => *guacd_status,
+            _ => None,
+        }
+    }
+}
+
 impl std::fmt::Display for SessionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SessionError::GuacdConnection(msg) => write!(f, "guacd connection failed: {}", msg),
+            SessionError::GuacdConnection { message, .. } => {
+                write!(f, "guacd connection failed: {}", message)
+            }
             SessionError::NotFound => write!(f, "session not found"),
             SessionError::NotActive => write!(f, "session is not active"),
             SessionError::ViewerLimit { viewers, max } => write!(
@@ -906,5 +1009,68 @@ mod tests {
         assert_eq!(req.hostname.as_deref(), Some("x"));
         assert!(req.ssh.as_ref().unwrap().private_key.is_none());
         assert!(req.rdp.as_ref().unwrap().domain.is_none());
+    }
+
+    /// `as_str` and `from_api_str` form a bijection on every variant
+    /// plus the `powershell` alias. The alias is a one-way street:
+    /// `as_str(Ssh)` is `"ssh"`, never `"powershell"` (powershell is
+    /// a different address-book entry type, not a distinct session
+    /// kind).
+    #[test]
+    fn api_string_roundtrip_for_every_variant_and_powershell_alias() {
+        use SessionType::*;
+        let all = [Ssh, Web, Rdp, Vnc, Vdi, Spice, Proxmox];
+        for t in &all {
+            let s = t.as_str();
+            // from_api_str falls through unknown to its `default` arg; the
+            // exact value of `default` is irrelevant here because every
+            // round-trip input is a real variant.
+            assert_eq!(
+                SessionType::from_api_str(s, Rdp),
+                *t,
+                "as_str({t:?}) = {s:?} failed to round-trip"
+            );
+            assert_eq!(SessionType::from_api_str_opt(s), Some(t.clone()));
+            // as_str is a bijection: every variant yields a unique string,
+            // and every string in ALL maps back.
+            assert!(SessionType::ALL.contains(&s));
+        }
+
+        // `ALL` lists every variant and only every variant (no duplicates).
+        let mut sorted: Vec<&str> = SessionType::ALL.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            all.len(),
+            "SessionType::ALL must list every variant exactly once"
+        );
+
+        // `powershell` is the SSH alias; it parses to Ssh but Ssh never
+        // serialises as `powershell`.
+        assert_eq!(
+            SessionType::from_api_str("powershell", Rdp),
+            SessionType::Ssh,
+        );
+        assert_eq!(
+            SessionType::from_api_str_opt("powershell"),
+            Some(SessionType::Ssh),
+        );
+        assert_eq!(SessionType::Ssh.as_str(), "ssh");
+
+        // Unknown inputs respect the caller's default (from_api_str)
+        // or yield None (from_api_str_opt). Per-caller defaults vary
+        // (vsphere = Vnc, address-book = Ssh); the API just preserves
+        // whatever the caller passes.
+        assert_eq!(
+            SessionType::from_api_str("", SessionType::Vnc),
+            SessionType::Vnc
+        );
+        assert_eq!(
+            SessionType::from_api_str("bogus", SessionType::Ssh),
+            SessionType::Ssh
+        );
+        assert_eq!(SessionType::from_api_str_opt(""), None);
+        assert_eq!(SessionType::from_api_str_opt("bogus"), None);
     }
 }

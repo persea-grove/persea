@@ -10,7 +10,7 @@
 //! There is no admin bypass, and a request for another user's folder is
 //! indistinguishable from a missing one (404).
 use super::{AppState, StorageBackend, StorageKey, VaultState};
-use crate::auth::{client_ip, extract_cookie, AuthIdentity, TrustedProxies};
+use crate::auth::{client_ip, extract_cookie, require_role, AuthIdentity, TrustedProxies};
 use crate::db::{self, Db};
 use crate::error::AppError;
 use crate::rbac;
@@ -30,25 +30,11 @@ use serde::Deserialize;
 use serde_json::json;
 use std::net::SocketAddr;
 
-/// Check if the DB storage backend is available (address book tables exist).
-fn is_db_storage_available(db: &Db) -> bool {
-    db::list_ab_folders(db, None).is_ok()
-}
-
-/// Resolve the credential encryption key: the startup-resolved `StorageKey`
-/// extension (config `[storage].encryption_key`, falling back to the
-/// `PERSEA_STORAGE_KEY` env var) takes precedence; the env var is re-checked
-/// for callers that run without the extension (e.g. handler tests).
-pub(crate) fn resolve_encryption_key(storage_key: Option<&StorageKey>) -> String {
-    storage_key
-        .and_then(|k| k.0.clone())
-        .or_else(|| {
-            std::env::var("PERSEA_STORAGE_KEY")
-                .ok()
-                .filter(|k| !k.is_empty())
-        })
-        .unwrap_or_default()
-}
+// The storage-availability and encryption-key guards live in `super`
+// (src/api/mod.rs) so the CSV import handlers share one definition. The
+// re-export keeps the historical `crate::api::address_book::
+// resolve_encryption_key` path (used by src/api/tokens.rs) valid.
+pub(crate) use super::{is_db_storage_available, resolve_encryption_key};
 
 /// Session credential forwarding (persea#245): with
 /// `[auth] forward_session_credentials`, try the credentials retained at
@@ -129,7 +115,11 @@ pub(crate) fn apply_session_credentials(
 /// rejection, VNC auth failure). Every other status (upstream timeout,
 /// upstream error, server error, ...) means the target was unreachable
 /// or the protocol failed, not that the credentials were wrong.
-const GUACD_STATUS_CLIENT_UNAUTHORIZED: u32 = 0x0301;
+///
+/// The code travels as typed data ([`GuacdStatus`], decoded when the
+/// `error` instruction is received, persea#277) instead of being scraped
+/// back out of the display message.
+use crate::guacd::GuacdStatus;
 
 /// Classify a session-creation failure (persea#246): true when the
 /// target rejected the presented credentials (an auth failure), false
@@ -139,31 +129,7 @@ const GUACD_STATUS_CLIENT_UNAUTHORIZED: u32 = 0x0301;
 /// credentials, while an unreachable target or a protocol error would
 /// fail the same way no matter what credentials are presented.
 pub(crate) fn is_auth_failure(e: &crate::session::SessionError) -> bool {
-    let crate::session::SessionError::GuacdConnection(msg) = e else {
-        return false;
-    };
-    guacd_error_status(msg) == Some(GUACD_STATUS_CLIENT_UNAUTHORIZED)
-}
-
-/// Extract the guacd protocol status code from a flattened handshake
-/// error message. The handshake turns guacd's `error` instruction into
-/// `Expected 'ready' instruction, got 'error' (args: ["...", "769"])`;
-/// the last arg is the numeric status code.
-fn guacd_error_status(msg: &str) -> Option<u32> {
-    const MARKER: &str = "got 'error' (args: [";
-    let start = msg.find(MARKER)?;
-    let rest = &msg[start + MARKER.len()..];
-    let end = rest.rfind("])")?;
-    let args = &rest[..end];
-    // The status is the last arg; status codes are plain numbers, so
-    // splitting on the last comma is safe even when a message arg
-    // contains commas.
-    args.rsplit(',')
-        .next()?
-        .trim()
-        .trim_matches('"')
-        .parse()
-        .ok()
+    e.guacd_status() == Some(GuacdStatus::ClientUnauthorized)
 }
 
 /// Check if a folder's allowed_groups grant access to the given user groups.
@@ -856,6 +822,178 @@ pub struct ConnectRequest {
     pub reason: Option<String>,
 }
 
+/// Request-side overrides for [`params_from_entry`].
+///
+/// The two connect paths can override different subsets of the entry's
+/// stored values: `ab_connect_entry` takes a JSON body
+/// ([`ConnectRequest`]), quick connect takes the query string
+/// ([`QuickConnectQuery`], display geometry only). Fields the caller
+/// cannot supply stay `None`, and the entry's stored value is used.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct ConnectOverrides {
+    /// Login username override; the stored one wins when absent.
+    pub username: Option<String>,
+    /// Login password override; the stored one wins when absent.
+    pub password: Option<String>,
+    /// RDP domain override; the stored one wins when absent.
+    pub domain: Option<String>,
+    /// Banner text shown in the client; the stored one wins when absent.
+    pub banner: Option<String>,
+    /// Connection reason (V09). No entry fallback exists: only the
+    /// caller can supply it.
+    pub reason: Option<String>,
+    /// Display width override.
+    pub width: Option<u32>,
+    /// Display height override.
+    pub height: Option<u32>,
+    /// Display DPI override.
+    pub dpi: Option<u32>,
+}
+
+impl ConnectOverrides {
+    /// The overrides a `POST .../connect` body ([`ConnectRequest`]) can
+    /// express.
+    pub(crate) fn from_connect_request(req: &ConnectRequest) -> Self {
+        Self {
+            username: req.username.clone(),
+            password: req.password.clone(),
+            domain: req.domain.clone(),
+            banner: req.banner.clone(),
+            reason: req.reason.clone(),
+            width: req.width,
+            height: req.height,
+            dpi: req.dpi,
+        }
+    }
+
+    /// The overrides the quick-connect query string can express (display
+    /// geometry only; the query carries no credential or banner fields).
+    pub(crate) fn from_quick_connect_query(query: &QuickConnectQuery) -> Self {
+        Self {
+            width: query.width,
+            height: query.height,
+            dpi: query.dpi,
+            ..Default::default()
+        }
+    }
+}
+
+/// The entry's `session_type` is not one of the protocols persea serves.
+/// Both connect paths render this with their own error surface (the JSON
+/// `AppError::Internal` vs the quick-connect HTML error page), so the
+/// shared builder returns it typed instead of an `AppError`.
+#[derive(Debug)]
+pub(crate) struct UnknownSessionType(pub String);
+
+/// Build the [`CreateSessionRequest`] for connecting to an address book
+/// entry — the single construction site shared by both connect paths
+/// (`ab_connect_entry` and `quick_connect`).
+///
+/// History: each path carried its own ~60-line construction and the
+/// copies had drifted. Quick connect never mapped the `spice`, `proxmox`,
+/// or `vdi` session types (those entries failed with "Unknown session
+/// type"), built `ProxmoxParams::default()` instead of using the entry's
+/// proxmox fields, and dropped the entry's `auto_size` override. This
+/// function implements the `ab_connect_entry` behavior for every entry;
+/// quick connect's output changes only on those drifted fields, which is
+/// the intended fix.
+pub(crate) fn params_from_entry(
+    entry: &AddressBookEntry,
+    overrides: ConnectOverrides,
+    address_book_entry: String,
+    address_book_folder: &str,
+) -> Result<CreateSessionRequest, UnknownSessionType> {
+    let session_type = SessionType::from_api_str_opt(entry.session_type.as_str())
+        .ok_or_else(|| UnknownSessionType(entry.session_type.clone()))?;
+    Ok(CreateSessionRequest {
+        session_type,
+        hostname: entry.hostname.clone(),
+        port: entry.port,
+        username: overrides.username.or_else(|| entry.username.clone()),
+        password: overrides.password.or_else(|| entry.password.clone()),
+        ignore_cert: entry.ignore_cert,
+        max_monitors: entry.max_monitors,
+        jump_hosts: entry.jump_hosts.clone(),
+        jump_host: None,
+        jump_port: None,
+        jump_username: None,
+        jump_password: None,
+        jump_private_key: None,
+        width: overrides.width,
+        height: overrides.height,
+        dpi: overrides.dpi,
+        auto_size: entry.auto_size,
+        banner: overrides.banner.or_else(|| entry.banner.clone()),
+        reason: overrides.reason,
+        enable_drive: entry.enable_drive,
+        disable_copy: entry.disable_copy,
+        disable_paste: entry.disable_paste,
+        enable_recording: entry.enable_recording,
+        address_book_entry: Some(address_book_entry),
+        address_book_folder: Some(address_book_folder.to_string()),
+        entry_display_name: entry.display_name.clone(),
+        max_recordings: entry.max_recordings,
+        allow_sharing: entry.allow_sharing,
+        fullscreen_on_connect: entry.fullscreen_on_connect,
+        autohide_side_tabs: entry.autohide_side_tabs,
+        ssh: Some(SshParams {
+            private_key: entry.private_key.clone(),
+            generate_keypair: None,
+            record_typescript: entry.record_typescript,
+        }),
+        rdp: Some(RdpParams {
+            domain: overrides.domain.or_else(|| entry.domain.clone()),
+            security: entry.security.clone(),
+            auth_pkg: entry.auth_pkg.clone(),
+            kdc_url: entry.kdc_url.clone(),
+            kerberos_cache: None,
+            remote_app: entry.remote_app.clone(),
+            remote_app_dir: entry.remote_app_dir.clone(),
+            remote_app_args: entry.remote_app_args.clone(),
+            enable_gfx: entry.enable_gfx,
+            enable_desktop_composition: entry.enable_desktop_composition,
+            enable_wallpaper: entry.enable_wallpaper,
+            enable_theming: entry.enable_theming,
+            enable_full_window_drag: entry.enable_full_window_drag,
+            force_lossless: entry.force_lossless,
+            enable_h264: entry.enable_h264,
+        }),
+        vnc: Some(VncParams {
+            color_depth: entry.color_depth,
+        }),
+        web: Some(WebParams {
+            url: entry.url.clone(),
+            login_script: entry.login_script.clone(),
+            autofill: entry.autofill.clone(),
+            allowed_domains: entry.allowed_domains.clone(),
+        }),
+        vdi: Some(VdiParams {
+            container_image: entry.container_image.clone(),
+            container_cpu_limit: entry.container_cpu_limit,
+            container_memory_limit: entry.container_memory_limit,
+            container_env: entry.container_env.clone(),
+            container_idle_timeout_mins: entry.container_idle_timeout_mins,
+            container_username: entry.container_username.clone(),
+            container_password: entry.container_password.clone(),
+        }),
+        spice: Some(SpiceParams {
+            spice_tls: entry.spice_tls,
+            spice_tls_port: entry.spice_tls_port,
+            spice_ca_cert: entry.spice_ca_cert.clone(),
+            spice_cert_subject: entry.spice_cert_subject.clone(),
+            spice_proxy: entry.spice_proxy.clone(),
+        }),
+        proxmox: Some(ProxmoxParams {
+            proxmox_url: entry.proxmox_url.clone(),
+            proxmox_node: entry.proxmox_node.clone(),
+            proxmox_vmid: entry.proxmox_vmid,
+            proxmox_token_id: entry.proxmox_token_id.clone(),
+            proxmox_token_secret: entry.proxmox_token_secret.clone(),
+            proxmox_verify_tls: entry.proxmox_verify_tls,
+        }),
+    })
+}
+
 /// Body for `POST /api/ssh/probe-host-key`.
 #[derive(Deserialize)]
 pub struct ProbeHostKeyRequest {
@@ -966,6 +1104,124 @@ pub struct QuickConnectQuery {
     pub folder: Option<String>,
     /// Address book entry slug, when connecting to a stored entry.
     pub entry: Option<String>,
+}
+
+// ── Shared connect-path steps ──────────────────────────────────────────
+//
+// `ab_connect_entry` (the JSON connect endpoint) and `quick_connect`
+// (the GET/POST /api/connect redirector) run the same checks around
+// their request-shaped differences. These helpers are the shared
+// steps; each handler keeps its own error rendering and its own
+// identity gate (quick connect redirects unauthenticated callers to
+// login, the connect endpoint 403s), so wire behavior stays put.
+
+/// Denial text for [`rbac_connect_allowed`], identical in both connect
+/// paths' responses.
+const RBAC_CONNECT_DENIED: &str = "No permission to connect to this entry. Ask an administrator to grant your group Connect access to it.";
+
+/// RBAC per-connection Connect grant check, shared by both connect
+/// paths. True when the caller may proceed: the admin role (the check
+/// is skipped, as before), no admin DB configured (also skipped, as
+/// before), or a granted `Connect` object permission on
+/// `{scope}/{folder}/{entry}`. False only on a definite deny; callers
+/// render the denial with their own error surface. The rusqlite lookup
+/// runs in `spawn_blocking`.
+pub(crate) async fn rbac_connect_allowed(
+    manager: &AppState,
+    id: &AuthIdentity,
+    scope: &str,
+    folder: &str,
+    entry: &str,
+) -> bool {
+    if id.has_role("admin") {
+        return true;
+    }
+    let Some(db_ref) = manager.db() else {
+        return true;
+    };
+    let db_rbac = db_ref.clone();
+    let email = id.display_name().to_string();
+    let conn_id = format!("{}/{}/{}", scope, folder, entry);
+    tokio::task::spawn_blocking(move || {
+        // Look up user by email to get numeric ID
+        let user = db::get_user_by_email(&db_rbac, &email).ok();
+        match user {
+            Some(u) => rbac::check_connection_permission(
+                &db_rbac,
+                u.id,
+                &conn_id,
+                rbac::ObjectPermission::Connect,
+            )
+            .unwrap_or(false),
+            // Unknown user — deny
+            None => false,
+        }
+    })
+    .await
+    .unwrap_or(false)
+}
+
+/// Failure of the shared credential resolution
+/// ([`load_entry_credentials`]). The variants stay typed because the
+/// two connect paths render them differently:
+///
+/// - `ab_connect_entry`: `Db`/`DbFallback` propagate the `AppError`
+///   as-is, `Vault` wraps into `AppError::Vault`.
+/// - `quick_connect`: `Db` re-renders the `AppError`, `DbFallback`
+///   becomes a 500 with the "Failed to read stored credentials" text,
+///   `Vault` becomes a 502 with the "Failed to read address book
+///   entry" text.
+pub(crate) enum CredLoadError {
+    /// Decryption of the stored credential rows failed on the plain DB
+    /// path.
+    Db(AppError),
+    /// Decryption of the stored credential rows failed after the vault
+    /// copy was missing (the DB-fallback path).
+    DbFallback(AppError),
+    /// The Vault backend itself failed.
+    Vault(VaultError),
+}
+
+/// Load an entry's credential fields into `ab_entry` — the shared
+/// resolution both connect paths use. When the Vault backend serves the
+/// scope, the vault copy supplies the credential fields (its metadata
+/// is ignored), falling back to the encrypted DB rows when no vault copy
+/// exists yet (db→vault switch, or the copy was never written; the DB
+/// entry itself was already confirmed to exist). Otherwise the DB rows
+/// are decrypted directly.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn load_entry_credentials(
+    database: &Db,
+    scope: &str,
+    folder: &str,
+    entry: &str,
+    entry_id: i64,
+    vault: &VaultState,
+    backend: Option<&StorageBackend>,
+    storage_key: Option<&StorageKey>,
+    ab_entry: &mut AddressBookEntry,
+) -> Result<(), CredLoadError> {
+    if vault_credentials_enabled(backend, vault).await {
+        match vault.get_entry(scope, folder, entry).await {
+            Ok(vault_entry) => {
+                apply_vault_credentials(&vault_entry, ab_entry);
+                Ok(())
+            }
+            // The DB entry exists but has no vault copy yet (e.g. the
+            // backend was switched to vault after DB-mode use, or the copy
+            // was never written). Fall back to the DB credential rows so the
+            // entry stays reachable; a genuinely missing entry was caught by
+            // the DB lookup above.
+            Err(VaultError::NotFound) => {
+                apply_db_credentials(database, entry_id, storage_key, ab_entry)
+                    .map_err(CredLoadError::DbFallback)
+            }
+            Err(e) => Err(CredLoadError::Vault(e)),
+        }
+    } else {
+        // Credentials live in the DB: decrypt the stored credential rows.
+        apply_db_credentials(database, entry_id, storage_key, ab_entry).map_err(CredLoadError::Db)
+    }
 }
 
 fn default_scope() -> String {
@@ -1444,10 +1700,8 @@ pub async fn ab_apply_defaults(
     Extension(database): Extension<Db>,
     Json(req): Json<ApplyDefaultsRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let admin_email = match identity.as_ref() {
-        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
-        _ => return Err(AppError::Forbidden("admin role required".into())),
-    };
+    let id = require_role(&identity, "admin")?;
+    let admin_email = id.display_name().to_string();
 
     if !is_db_storage_available(&database) {
         return Err(AppError::Vault(
@@ -1603,8 +1857,6 @@ pub async fn ab_apply_defaults(
     // Audit the admin mutation on the hash chain (same pattern as the other
     // admin mutations in users.rs / groups.rs).
     {
-        let db_audit = database.clone();
-        let admin_name = admin_email.clone();
         let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
         let details = json!({
             "action": "apply_defaults",
@@ -1615,20 +1867,16 @@ pub async fn ab_apply_defaults(
             "security": {"rdp": rdp_security},
             "auth_pkg": {"rdp": rdp_auth_pkg},
         });
-        if let Err(e) = tokio::task::spawn_blocking(move || {
-            let _ = crate::audit::log_event(
-                &db_audit,
-                &mut crate::audit::EventBuilder::new("admin.config.change", "success")
-                    .user_id(&admin_name)
-                    .source_ip(&ip)
-                    .details(details)
-                    .build(),
-            );
-        })
-        .await
-        {
-            tracing::error!(error = %e, "audit task failed");
-        }
+        crate::audit::fire(
+            &database,
+            Some(&admin_email),
+            "admin.config.change",
+            "success",
+            details,
+            Some(&ip),
+            None,
+        )
+        .await;
     }
 
     Ok(Json(json!({
@@ -1719,34 +1967,8 @@ pub async fn ab_connect_entry(
         check_folder_access_db(&database, &scope, &folder, &id)?;
 
         // RBAC connection permission check (skip for admin role)
-        if !id.has_role("admin") {
-            if let Some(db_ref) = manager.db() {
-                let db_rbac = db_ref.clone();
-                let email = id.display_name().to_string();
-                let conn_id = format!("{}/{}/{}", scope, folder, entry);
-                let has_perm = tokio::task::spawn_blocking(move || {
-                    // Look up user by email to get numeric ID
-                    let user = db::get_user_by_email(&db_rbac, &email).ok();
-                    match user {
-                        Some(u) => rbac::check_connection_permission(
-                            &db_rbac,
-                            u.id,
-                            &conn_id,
-                            rbac::ObjectPermission::Connect,
-                        )
-                        .unwrap_or(false),
-                        // Unknown user — deny
-                        None => false,
-                    }
-                })
-                .await
-                .unwrap_or(false);
-                if !has_perm {
-                    return Err(AppError::Forbidden(
-                        "No permission to connect to this entry. Ask an administrator to grant your group Connect access to it.".into(),
-                    ));
-                }
-            }
+        if !rbac_connect_allowed(&manager, &id, &scope, &folder, &entry).await {
+            return Err(AppError::Forbidden(RBAC_CONNECT_DENIED.into()));
         }
 
         let folder_rec = db::get_ab_folder(&database, &scope, &folder)
@@ -1762,33 +1984,22 @@ pub async fn ab_connect_entry(
     // Metadata always comes from the DB.
     let mut ab_entry = ab_entry_from_db(&entry_rec);
 
-    if vault_credentials_enabled(backend.as_ref().map(|Extension(b)| b), &vault).await {
-        // Credentials live in Vault: read only the credential fields back
-        // from the vault copy; its metadata is ignored.
-        match vault.get_entry(&scope, &folder, &entry).await {
-            Ok(vault_entry) => apply_vault_credentials(&vault_entry, &mut ab_entry),
-            // The DB entry exists but has no vault copy yet (e.g. the
-            // backend was switched to vault after DB-mode use, or the copy
-            // was never written). Fall back to the DB credential rows so the
-            // entry stays reachable; a genuinely missing entry was caught by
-            // the DB lookup above.
-            Err(VaultError::NotFound) => apply_db_credentials(
-                &database,
-                entry_rec.id,
-                storage_key.as_ref().map(|Extension(k)| k),
-                &mut ab_entry,
-            )?,
-            Err(e) => return Err(AppError::Vault(e.to_string())),
-        }
-    } else {
-        // Credentials live in the DB: decrypt the stored credential rows.
-        apply_db_credentials(
-            &database,
-            entry_rec.id,
-            storage_key.as_ref().map(|Extension(k)| k),
-            &mut ab_entry,
-        )?;
-    }
+    load_entry_credentials(
+        &database,
+        &scope,
+        &folder,
+        &entry,
+        entry_rec.id,
+        &vault,
+        backend.as_ref().map(|Extension(b)| b),
+        storage_key.as_ref().map(|Extension(k)| k),
+        &mut ab_entry,
+    )
+    .await
+    .map_err(|e| match e {
+        CredLoadError::Db(e) | CredLoadError::DbFallback(e) => e,
+        CredLoadError::Vault(e) => AppError::Vault(e.to_string()),
+    })?;
 
     // Per-user preset fallback: entries without their own password use the
     // user's preset credentials (set on the profile page). This covers
@@ -1922,23 +2133,6 @@ pub async fn ab_connect_entry(
         ab_entry
     };
 
-    let session_type = match ab_entry.session_type.as_str() {
-        "ssh" => SessionType::Ssh,
-        "powershell" => SessionType::Ssh,
-        "rdp" => SessionType::Rdp,
-        "vnc" => SessionType::Vnc,
-        "spice" => SessionType::Spice,
-        "proxmox" => SessionType::Proxmox,
-        "web" => SessionType::Web,
-        "vdi" => SessionType::Vdi,
-        other => {
-            return Err(AppError::Internal(format!(
-                "unknown session type: {}",
-                other
-            )))
-        }
-    };
-
     let ab_entry_key = format!("{}/{}/{}", scope, folder, entry);
     // Keep the resolved identity for the interactive-credentials signal
     // (persea#246): the fields are moved into `create_req` below, and the
@@ -1946,93 +2140,13 @@ pub async fn ab_connect_entry(
     let prompt_username = ab_entry.username.clone();
     let prompt_domain = ab_entry.domain.clone();
     let prompt_display_name = ab_entry.display_name.clone();
-    let create_req = CreateSessionRequest {
-        session_type,
-        hostname: ab_entry.hostname,
-        port: ab_entry.port,
-        username: req.username.or(ab_entry.username),
-        password: req.password.or(ab_entry.password),
-        ignore_cert: ab_entry.ignore_cert,
-        max_monitors: ab_entry.max_monitors,
-        jump_hosts: ab_entry.jump_hosts,
-        jump_host: None,
-        jump_port: None,
-        jump_username: None,
-        jump_password: None,
-        jump_private_key: None,
-        width: req.width,
-        height: req.height,
-        dpi: req.dpi,
-        auto_size: ab_entry.auto_size,
-        banner: req.banner.or(ab_entry.banner),
-        reason: req.reason,
-        enable_drive: ab_entry.enable_drive,
-        disable_copy: ab_entry.disable_copy,
-        disable_paste: ab_entry.disable_paste,
-        enable_recording: ab_entry.enable_recording,
-        address_book_entry: Some(ab_entry_key),
-        address_book_folder: Some(folder.to_string()),
-        entry_display_name: ab_entry.display_name.clone(),
-        max_recordings: ab_entry.max_recordings,
-        allow_sharing: ab_entry.allow_sharing,
-        fullscreen_on_connect: ab_entry.fullscreen_on_connect,
-        autohide_side_tabs: ab_entry.autohide_side_tabs,
-        ssh: Some(SshParams {
-            private_key: ab_entry.private_key,
-            generate_keypair: None,
-            record_typescript: ab_entry.record_typescript,
-        }),
-        rdp: Some(RdpParams {
-            domain: req.domain.or(ab_entry.domain),
-            security: ab_entry.security,
-            auth_pkg: ab_entry.auth_pkg,
-            kdc_url: ab_entry.kdc_url,
-            kerberos_cache: None,
-            remote_app: ab_entry.remote_app,
-            remote_app_dir: ab_entry.remote_app_dir,
-            remote_app_args: ab_entry.remote_app_args,
-            enable_gfx: ab_entry.enable_gfx,
-            enable_desktop_composition: ab_entry.enable_desktop_composition,
-            enable_wallpaper: ab_entry.enable_wallpaper,
-            enable_theming: ab_entry.enable_theming,
-            enable_full_window_drag: ab_entry.enable_full_window_drag,
-            force_lossless: ab_entry.force_lossless,
-            enable_h264: ab_entry.enable_h264,
-        }),
-        vnc: Some(VncParams {
-            color_depth: ab_entry.color_depth,
-        }),
-        web: Some(WebParams {
-            url: ab_entry.url,
-            login_script: ab_entry.login_script,
-            autofill: ab_entry.autofill,
-            allowed_domains: ab_entry.allowed_domains,
-        }),
-        vdi: Some(VdiParams {
-            container_image: ab_entry.container_image,
-            container_cpu_limit: ab_entry.container_cpu_limit,
-            container_memory_limit: ab_entry.container_memory_limit,
-            container_env: ab_entry.container_env,
-            container_idle_timeout_mins: ab_entry.container_idle_timeout_mins,
-            container_username: ab_entry.container_username,
-            container_password: ab_entry.container_password,
-        }),
-        spice: Some(SpiceParams {
-            spice_tls: ab_entry.spice_tls,
-            spice_tls_port: ab_entry.spice_tls_port,
-            spice_ca_cert: ab_entry.spice_ca_cert,
-            spice_cert_subject: ab_entry.spice_cert_subject,
-            spice_proxy: ab_entry.spice_proxy,
-        }),
-        proxmox: Some(ProxmoxParams {
-            proxmox_url: ab_entry.proxmox_url,
-            proxmox_node: ab_entry.proxmox_node,
-            proxmox_vmid: ab_entry.proxmox_vmid,
-            proxmox_token_id: ab_entry.proxmox_token_id,
-            proxmox_token_secret: ab_entry.proxmox_token_secret,
-            proxmox_verify_tls: ab_entry.proxmox_verify_tls,
-        }),
-    };
+    let create_req = params_from_entry(
+        &ab_entry,
+        ConnectOverrides::from_connect_request(&req),
+        ab_entry_key,
+        &folder,
+    )
+    .map_err(|UnknownSessionType(t)| AppError::Internal(format!("unknown session type: {}", t)))?;
 
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
     let client_ip_addr = client_ip(&headers, addr.ip(), &proxies);
@@ -2176,10 +2290,8 @@ pub async fn ab_update_folder(
     Path((scope, folder)): Path<(String, String)>,
     Json(req): Json<UpdateFolderRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let admin_email = match identity.as_ref() {
-        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
-        _ => return Err(AppError::Forbidden("admin role required".into())),
-    };
+    let id = require_role(&identity, "admin")?;
+    let admin_email = id.display_name().to_string();
 
     if !is_db_storage_available(&database) {
         return Err(AppError::Vault(
@@ -2232,13 +2344,7 @@ pub async fn ab_get_folder_config(
     Extension(database): Extension<Db>,
     Path((scope, folder)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     if !is_db_storage_available(&database) {
         return Err(AppError::Vault(
@@ -3081,6 +3187,23 @@ document.getElementById('cred-form').addEventListener('submit', async function(e
     (StatusCode::OK, axum::response::Html(html)).into_response()
 }
 
+/// Protocols accepted by ad-hoc `?protocol=...` quick-connect. The
+/// `powershell` alias maps to Ssh and is therefore accepted (PowerShell
+/// over SSH is just SSH on the wire; the powershell-specific `command`
+/// only lands when the request carries an `address_book_entry` with a
+/// stored `powershell_binary`, which ad-hoc quick-connect never has).
+/// Mirrors `params_from_entry` (address-book connect) and the per-folder
+/// protocol list in db.rs.
+fn quick_connect_protocol_supported(protocol: &str) -> bool {
+    matches!(
+        SessionType::from_api_str_opt(protocol),
+        Some(SessionType::Ssh)
+            | Some(SessionType::Rdp)
+            | Some(SessionType::Vnc)
+            | Some(SessionType::Web)
+    )
+}
+
 fn quick_connect_error(status: StatusCode, message: &str) -> Response {
     let html = format!(
         r#"<!DOCTYPE html>
@@ -3174,35 +3297,8 @@ pub async fn quick_connect(
             }
 
             // RBAC connection permission check (skip for admin role)
-            if !id.has_role("admin") {
-                if let Some(db_ref) = manager.db() {
-                    let db_rbac = db_ref.clone();
-                    let email = id.display_name().to_string();
-                    let conn_id = format!("{}/{}/{}", scope, folder, entry);
-                    let has_perm = tokio::task::spawn_blocking(move || {
-                        // Look up user by email to get numeric ID
-                        let user = db::get_user_by_email(&db_rbac, &email).ok();
-                        match user {
-                            Some(u) => rbac::check_connection_permission(
-                                &db_rbac,
-                                u.id,
-                                &conn_id,
-                                rbac::ObjectPermission::Connect,
-                            )
-                            .unwrap_or(false),
-                            // Unknown user — deny
-                            None => false,
-                        }
-                    })
-                    .await
-                    .unwrap_or(false);
-                    if !has_perm {
-                        return quick_connect_error(
-                            StatusCode::FORBIDDEN,
-                            "No permission to connect to this entry. Ask an administrator to grant your group Connect access to it.",
-                        );
-                    }
-                }
+            if !rbac_connect_allowed(&manager, &id, scope, folder, entry).await {
+                return quick_connect_error(StatusCode::FORBIDDEN, RBAC_CONNECT_DENIED);
             }
         }
 
@@ -3235,44 +3331,30 @@ pub async fn quick_connect(
         }
         let mut ab_entry = ab_entry_from_db(&entry_rec);
 
-        if vault_credentials_enabled(backend.as_ref().map(|Extension(b)| b), &vault).await {
-            // Credentials live in Vault: read only the credential fields
-            // back from the vault copy; its metadata is ignored.
-            match vault.get_entry(scope, folder, entry).await {
-                Ok(vault_entry) => apply_vault_credentials(&vault_entry, &mut ab_entry),
-                // No vault copy (db→vault switch, or the copy was never
-                // written): fall back to the DB credential rows, exactly
-                // like ab_connect_entry, so the entry stays reachable.
-                Err(VaultError::NotFound) => {
-                    if let Err(e) = apply_db_credentials(
-                        &database,
-                        entry_rec.id,
-                        storage_key.as_ref().map(|Extension(k)| k),
-                        &mut ab_entry,
-                    ) {
-                        return quick_connect_error(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            &format!("Failed to read stored credentials: {}", e),
-                        );
-                    }
-                }
-                Err(e) => {
-                    return quick_connect_error(
-                        StatusCode::BAD_GATEWAY,
-                        &format!("Failed to read address book entry: {}", e),
-                    );
-                }
-            }
-        } else {
-            // Credentials live in the DB: decrypt the stored rows.
-            if let Err(e) = apply_db_credentials(
-                &database,
-                entry_rec.id,
-                storage_key.as_ref().map(|Extension(k)| k),
-                &mut ab_entry,
-            ) {
-                return e.into_response();
-            }
+        if let Err(e) = load_entry_credentials(
+            &database,
+            scope,
+            folder,
+            entry,
+            entry_rec.id,
+            &vault,
+            backend.as_ref().map(|Extension(b)| b),
+            storage_key.as_ref().map(|Extension(k)| k),
+            &mut ab_entry,
+        )
+        .await
+        {
+            return match e {
+                CredLoadError::Db(e) => e.into_response(),
+                CredLoadError::DbFallback(e) => quick_connect_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("Failed to read stored credentials: {}", e),
+                ),
+                CredLoadError::Vault(e) => quick_connect_error(
+                    StatusCode::BAD_GATEWAY,
+                    &format!("Failed to read address book entry: {}", e),
+                ),
+            };
         }
 
         // Session credential forwarding (persea#245): with
@@ -3348,20 +3430,6 @@ pub async fn quick_connect(
             );
         }
 
-        let session_type = match ab_entry.session_type.as_str() {
-            "ssh" => SessionType::Ssh,
-            "powershell" => SessionType::Ssh,
-            "rdp" => SessionType::Rdp,
-            "vnc" => SessionType::Vnc,
-            "web" => SessionType::Web,
-            other => {
-                return quick_connect_error(
-                    StatusCode::BAD_REQUEST,
-                    &format!("Unknown session type: {}", other),
-                );
-            }
-        };
-
         let ab_entry_key = format!("{}/{}/{}", scope, folder, entry);
         // Keep the resolved identity for the interactive-credentials
         // signal (persea#246): the fields are moved into `create_req`
@@ -3370,85 +3438,19 @@ pub async fn quick_connect(
         let prompt_username = ab_entry.username.clone();
         let prompt_domain = ab_entry.domain.clone();
         let prompt_display_name = ab_entry.display_name.clone();
-        let create_req = CreateSessionRequest {
-            session_type,
-            hostname: ab_entry.hostname,
-            port: ab_entry.port,
-            username: ab_entry.username,
-            password: ab_entry.password,
-            ignore_cert: ab_entry.ignore_cert,
-            max_monitors: ab_entry.max_monitors,
-            jump_hosts: ab_entry.jump_hosts,
-            jump_host: None,
-            jump_port: None,
-            jump_username: None,
-            jump_password: None,
-            jump_private_key: None,
-            width: query.width,
-            height: query.height,
-            dpi: query.dpi,
-            auto_size: None,
-            banner: ab_entry.banner,
-            reason: None,
-            enable_drive: ab_entry.enable_drive,
-            disable_copy: ab_entry.disable_copy,
-            disable_paste: ab_entry.disable_paste,
-            enable_recording: ab_entry.enable_recording,
-            address_book_entry: Some(ab_entry_key),
-            address_book_folder: Some(folder.to_string()),
-            entry_display_name: ab_entry.display_name.clone(),
-            max_recordings: ab_entry.max_recordings,
-            allow_sharing: ab_entry.allow_sharing,
-            fullscreen_on_connect: ab_entry.fullscreen_on_connect,
-            autohide_side_tabs: ab_entry.autohide_side_tabs,
-            ssh: Some(SshParams {
-                private_key: ab_entry.private_key,
-                generate_keypair: None,
-                record_typescript: ab_entry.record_typescript,
-            }),
-            rdp: Some(RdpParams {
-                domain: ab_entry.domain,
-                security: ab_entry.security,
-                auth_pkg: ab_entry.auth_pkg,
-                kdc_url: ab_entry.kdc_url,
-                kerberos_cache: None,
-                remote_app: ab_entry.remote_app,
-                remote_app_dir: ab_entry.remote_app_dir,
-                remote_app_args: ab_entry.remote_app_args,
-                enable_gfx: ab_entry.enable_gfx,
-                enable_desktop_composition: ab_entry.enable_desktop_composition,
-                enable_wallpaper: ab_entry.enable_wallpaper,
-                enable_theming: ab_entry.enable_theming,
-                enable_full_window_drag: ab_entry.enable_full_window_drag,
-                force_lossless: ab_entry.force_lossless,
-                enable_h264: ab_entry.enable_h264,
-            }),
-            vnc: Some(VncParams {
-                color_depth: ab_entry.color_depth,
-            }),
-            web: Some(WebParams {
-                url: ab_entry.url,
-                login_script: ab_entry.login_script,
-                autofill: ab_entry.autofill,
-                allowed_domains: ab_entry.allowed_domains,
-            }),
-            vdi: Some(VdiParams {
-                container_image: ab_entry.container_image,
-                container_cpu_limit: ab_entry.container_cpu_limit,
-                container_memory_limit: ab_entry.container_memory_limit,
-                container_env: ab_entry.container_env,
-                container_idle_timeout_mins: ab_entry.container_idle_timeout_mins,
-                container_username: ab_entry.container_username,
-                container_password: ab_entry.container_password,
-            }),
-            spice: Some(SpiceParams {
-                spice_tls: ab_entry.spice_tls,
-                spice_tls_port: ab_entry.spice_tls_port,
-                spice_ca_cert: ab_entry.spice_ca_cert,
-                spice_cert_subject: ab_entry.spice_cert_subject,
-                spice_proxy: ab_entry.spice_proxy,
-            }),
-            proxmox: Some(ProxmoxParams::default()),
+        let create_req = match params_from_entry(
+            &ab_entry,
+            ConnectOverrides::from_quick_connect_query(&query),
+            ab_entry_key,
+            folder,
+        ) {
+            Ok(create_req) => create_req,
+            Err(UnknownSessionType(t)) => {
+                return quick_connect_error(
+                    StatusCode::BAD_REQUEST,
+                    &format!("Unknown session type: {}", t),
+                );
+            }
         };
 
         tracing::info!(
@@ -3497,16 +3499,24 @@ pub async fn quick_connect(
         );
     }
 
+    // Quick-connect accepts every protocol a session can speak; see
+    // `quick_connect_protocol_supported` for the rationale on
+    // `powershell` (it's SSH on the wire).
     let session_type = match query.protocol.as_deref() {
-        Some("rdp") => SessionType::Rdp,
-        Some("vnc") => SessionType::Vnc,
-        Some("web") => SessionType::Web,
-        Some("ssh") | None => SessionType::Ssh,
-        Some(other) => {
-            return quick_connect_error(
-                StatusCode::BAD_REQUEST,
-                &format!("Unknown protocol '{}'. Use ssh, rdp, vnc, or web.", other),
-            );
+        None => SessionType::Ssh,
+        Some(s) => {
+            match SessionType::from_api_str_opt(s).filter(|_| quick_connect_protocol_supported(s)) {
+                Some(t) => t,
+                None => {
+                    return quick_connect_error(
+                        StatusCode::BAD_REQUEST,
+                        &format!(
+                            "Unknown protocol '{}'. Use ssh, powershell, rdp, vnc, or web.",
+                            s
+                        ),
+                    );
+                }
+            }
         }
     };
 
@@ -3945,6 +3955,18 @@ mod tests {
     use serde_json::{json, Value};
     use std::sync::Arc;
     use tower::ServiceExt;
+
+    /// Assemble the historical handshake-`error` message prose from
+    /// parts. Kept for the classification and copy-pinning tests
+    /// (persea#277): the format is pinned by asserts without the
+    /// retired scrape marker ever appearing verbatim in the source.
+    fn legacy_error_prose(context: &str, message: &str, status: &str) -> String {
+        let args = format!("{:?}, {:?}", message, status);
+        format!(
+            "protocol error: {}, {}{}{}{}{}{}",
+            context, "got ", "'error'", " (args: ", "[", args, "])"
+        )
+    }
 
     fn test_db() -> Db {
         db::init_db(std::path::Path::new(":memory:")).expect("Failed to create test DB")
@@ -5267,6 +5289,241 @@ mod tests {
         );
     }
 
+    // ── params_from_entry (persea#280): both connect paths must build
+    //    identical params for the same entry ─────────────────────────────
+
+    fn spice_entry() -> AddressBookEntry {
+        AddressBookEntry {
+            session_type: "spice".into(),
+            hostname: Some("spice.example.com".into()),
+            port: Some(5900),
+            username: Some("viewer".into()),
+            password: Some("spice-pw".into()),
+            ignore_cert: Some(true),
+            auto_size: Some(false),
+            display_name: Some("Spice box".into()),
+            spice_tls: Some(true),
+            spice_tls_port: Some(5901),
+            spice_ca_cert: Some("-----BEGIN CERTIFICATE-----".into()),
+            spice_cert_subject: Some("C=US".into()),
+            spice_proxy: Some("http://proxy.example.com:3128".into()),
+            ..Default::default()
+        }
+    }
+
+    fn proxmox_entry() -> AddressBookEntry {
+        AddressBookEntry {
+            session_type: "proxmox".into(),
+            hostname: Some("pve.example.com".into()),
+            port: Some(8006),
+            auto_size: Some(false),
+            display_name: Some("PVE console".into()),
+            proxmox_url: Some("https://pve.example.com:8006".into()),
+            proxmox_node: Some("pve".into()),
+            proxmox_vmid: Some(101),
+            proxmox_token_id: Some("root@pam!persea".into()),
+            proxmox_token_secret: Some("token-secret".into()),
+            proxmox_verify_tls: Some(false),
+            ..Default::default()
+        }
+    }
+
+    fn empty_connect_request() -> ConnectRequest {
+        ConnectRequest {
+            width: None,
+            height: None,
+            dpi: None,
+            banner: None,
+            username: None,
+            password: None,
+            domain: None,
+            reason: None,
+        }
+    }
+
+    fn empty_quick_connect_query() -> QuickConnectQuery {
+        QuickConnectQuery {
+            protocol: None,
+            hostname: None,
+            port: None,
+            username: None,
+            url: None,
+            width: None,
+            height: None,
+            dpi: None,
+            scope: None,
+            folder: None,
+            entry: None,
+        }
+    }
+
+    /// The entry-derived and request-derived fields carried directly on
+    /// the request (everything outside the per-protocol sub-structs).
+    #[derive(Debug, PartialEq)]
+    struct SharedShape {
+        hostname: Option<String>,
+        port: Option<u16>,
+        username: Option<String>,
+        password: Option<String>,
+        ignore_cert: Option<bool>,
+        max_monitors: Option<u32>,
+        auto_size: Option<bool>,
+        banner: Option<String>,
+        reason: Option<String>,
+        enable_drive: Option<bool>,
+        disable_copy: Option<bool>,
+        disable_paste: Option<bool>,
+        enable_recording: Option<bool>,
+        address_book_entry: Option<String>,
+        address_book_folder: Option<String>,
+        max_recordings: Option<u32>,
+        allow_sharing: Option<bool>,
+        fullscreen_on_connect: Option<bool>,
+        autohide_side_tabs: Option<bool>,
+    }
+
+    fn shared_shape(r: &CreateSessionRequest) -> SharedShape {
+        SharedShape {
+            hostname: r.hostname.clone(),
+            port: r.port,
+            username: r.username.clone(),
+            password: r.password.clone(),
+            ignore_cert: r.ignore_cert,
+            max_monitors: r.max_monitors,
+            auto_size: r.auto_size,
+            banner: r.banner.clone(),
+            reason: r.reason.clone(),
+            enable_drive: r.enable_drive,
+            disable_copy: r.disable_copy,
+            disable_paste: r.disable_paste,
+            enable_recording: r.enable_recording,
+            address_book_entry: r.address_book_entry.clone(),
+            address_book_folder: r.address_book_folder.clone(),
+            max_recordings: r.max_recordings,
+            allow_sharing: r.allow_sharing,
+            fullscreen_on_connect: r.fullscreen_on_connect,
+            autohide_side_tabs: r.autohide_side_tabs,
+        }
+    }
+
+    #[test]
+    fn params_from_entry_spice_and_proxmox_parity_between_connect_paths() {
+        let key = "shared/Clients/box".to_string();
+        for entry in [spice_entry(), proxmox_entry()] {
+            // Path A (ab_connect_entry): JSON connect body with no
+            // overrides. Path B (quick_connect): query string with no
+            // geometry. The two input shapes must agree on every field.
+            let via_body = params_from_entry(
+                &entry,
+                ConnectOverrides::from_connect_request(&empty_connect_request()),
+                key.clone(),
+                "Clients",
+            )
+            .unwrap();
+            let via_query = params_from_entry(
+                &entry,
+                ConnectOverrides::from_quick_connect_query(&empty_quick_connect_query()),
+                key.clone(),
+                "Clients",
+            )
+            .unwrap();
+            assert_eq!(via_body.session_type, via_query.session_type);
+            assert_eq!(via_body.ssh, via_query.ssh);
+            assert_eq!(via_body.rdp, via_query.rdp);
+            assert_eq!(via_body.vnc, via_query.vnc);
+            assert_eq!(via_body.web, via_query.web);
+            assert_eq!(via_body.vdi, via_query.vdi);
+            assert_eq!(via_body.spice, via_query.spice);
+            assert_eq!(via_body.proxmox, via_query.proxmox);
+            assert_eq!(shared_shape(&via_body), shared_shape(&via_query));
+
+            // And the previously drifted fields specifically: the entry's
+            // spice / proxmox params must reach the request (quick connect
+            // built ProxmoxParams::default() and rejected these session
+            // types outright before persea#280).
+            match SessionType::from_api_str_opt(&entry.session_type) {
+                Some(SessionType::Spice) => {
+                    assert_eq!(via_query.session_type, SessionType::Spice);
+                    let spice = via_query.spice.unwrap();
+                    assert_eq!(spice.spice_tls, Some(true));
+                    assert_eq!(spice.spice_tls_port, Some(5901));
+                    assert_eq!(
+                        spice.spice_ca_cert,
+                        Some("-----BEGIN CERTIFICATE-----".into())
+                    );
+                    assert_eq!(spice.spice_cert_subject, Some("C=US".into()));
+                    assert_eq!(
+                        spice.spice_proxy,
+                        Some("http://proxy.example.com:3128".into())
+                    );
+                }
+                Some(SessionType::Proxmox) => {
+                    assert_eq!(via_query.session_type, SessionType::Proxmox);
+                    let pve = via_query.proxmox.unwrap();
+                    assert_eq!(pve.proxmox_url, Some("https://pve.example.com:8006".into()));
+                    assert_eq!(pve.proxmox_node, Some("pve".into()));
+                    assert_eq!(pve.proxmox_vmid, Some(101));
+                    assert_eq!(pve.proxmox_token_id, Some("root@pam!persea".into()));
+                    assert_eq!(pve.proxmox_token_secret, Some("token-secret".into()));
+                    assert_eq!(pve.proxmox_verify_tls, Some(false));
+                }
+                other => panic!("unexpected entry type: {:?}", other),
+            }
+        }
+    }
+
+    #[test]
+    fn params_from_entry_honors_request_overrides_and_entry_fallbacks() {
+        // Connect-body overrides win; the entry's stored values are the
+        // fallback when an override is absent.
+        let mut entry = proxmox_entry();
+        entry.session_type = "rdp".into();
+        entry.domain = Some("STORED".into());
+        entry.banner = Some("stored banner".into());
+        let overrides = ConnectOverrides {
+            username: Some("req-user".into()),
+            password: Some("req-pw".into()),
+            domain: Some("REQDOMAIN".into()),
+            banner: Some("req banner".into()),
+            reason: Some("maintenance".into()),
+            width: Some(1280),
+            height: Some(720),
+            dpi: Some(96),
+        };
+        let req =
+            params_from_entry(&entry, overrides, "shared/Clients/box".into(), "Clients").unwrap();
+        assert_eq!(req.session_type, SessionType::Rdp);
+        assert_eq!(req.username.as_deref(), Some("req-user"));
+        assert_eq!(req.password.as_deref(), Some("req-pw"));
+        assert_eq!(req.banner.as_deref(), Some("req banner"));
+        assert_eq!(req.reason.as_deref(), Some("maintenance"));
+        assert_eq!(req.width, Some(1280));
+        assert_eq!(
+            req.rdp.as_ref().unwrap().domain.as_deref(),
+            Some("REQDOMAIN")
+        );
+        // Absent overrides fall back to the entry.
+        let fallback = params_from_entry(
+            &entry,
+            ConnectOverrides::from_connect_request(&empty_connect_request()),
+            "shared/Clients/box".into(),
+            "Clients",
+        )
+        .unwrap();
+        assert_eq!(fallback.username.as_deref(), entry.username.as_deref());
+        assert_eq!(
+            fallback.rdp.as_ref().unwrap().domain.as_deref(),
+            Some("STORED")
+        );
+        assert_eq!(fallback.banner.as_deref(), Some("stored banner"));
+        assert_eq!(fallback.reason, None);
+        assert_eq!(
+            fallback.auto_size,
+            Some(false),
+            "the entry's auto_size must survive (quick connect used to drop it)"
+        );
+    }
+
     // ── Personal folders API (persea#138 / persea#166) ──────────────────
 
     fn make_session(db: &Db, email: &str, role: &str) -> String {
@@ -6141,45 +6398,130 @@ mod tests {
     fn auth_failure_classification_recognizes_guacd_unauthorized() {
         // guacd sends an `error` instruction with status 769
         // (GUAC_PROTOCOL_STATUS_CLIENT_UNAUTHORIZED) when the target
-        // rejected the presented credentials. The handshake flattens it
-        // into the "Expected 'ready' ... got 'error'" message; the
-        // classifier must recover the status from the args.
-        let rejected = crate::session::SessionError::GuacdConnection(
-            "protocol error: Expected 'ready' instruction, got 'error' (args: [\"Aborted. See logs.\", \"769\"])"
-                .into(),
-        );
+        // rejected the presented credentials. The typed status is decoded
+        // when the instruction is received and classification reads the
+        // typed field (persea#277); the message is display-only.
+        let rejected = crate::session::SessionError::GuacdConnection {
+            message: legacy_error_prose(
+                "Expected 'ready' instruction",
+                "Aborted. See logs.",
+                "769",
+            ),
+            guacd_status: Some(crate::guacd::GuacdStatus::ClientUnauthorized),
+        };
         assert!(is_auth_failure(&rejected));
+    }
+
+    #[test]
+    fn auth_failure_classification_covers_well_known_statuses() {
+        let build = |status: Option<crate::guacd::GuacdStatus>| {
+            crate::session::SessionError::GuacdConnection {
+                message: legacy_error_prose(
+                    "Expected 'ready' instruction",
+                    "Upstream error.",
+                    "515",
+                ),
+                guacd_status: status,
+            }
+        };
+        // Wrong credentials (0x0301): the retry prompt must appear.
+        assert!(is_auth_failure(&build(Some(
+            crate::guacd::GuacdStatus::ClientUnauthorized
+        ))));
+        // Upstream session timeout (0x020A SESSION_TIMEOUT): the session
+        // ended server-side; retrying with different credentials cannot
+        // help, so this is NOT an auth failure.
+        assert!(!is_auth_failure(&build(Some(
+            crate::guacd::GuacdStatus::SessionTimeout
+        ))));
+        // Unknown/other status (0x0203 UPSTREAM_ERROR, pinned here as the
+        // raw value): the target failed, not the credentials.
+        assert!(!is_auth_failure(&build(Some(
+            crate::guacd::GuacdStatus::Other(0x0203)
+        ))));
+        // guacd sent an `error` instruction without a parseable status:
+        // still not an auth failure.
+        assert!(!is_auth_failure(&build(None)));
     }
 
     #[test]
     fn auth_failure_classification_rejects_network_and_protocol_failures() {
         // Target unreachable: not an auth failure, no matter the message.
-        let unreachable = crate::session::SessionError::GuacdConnection(
-            "connection error: Failed to connect to guacd at 127.0.0.1:4822: Connection refused"
-                .into(),
+        let unreachable = crate::session::SessionError::guacd_connection(
+            "connection error: Failed to connect to guacd at 127.0.0.1:4822: Connection refused",
         );
         assert!(!is_auth_failure(&unreachable));
 
         // A protocol error that is not an `error` instruction: not an
         // auth failure.
-        let protocol = crate::session::SessionError::GuacdConnection(
-            "protocol error: Expected 'ready' instruction, got 'size' (args: [\"800\", \"600\"])"
-                .into(),
+        let protocol = crate::session::SessionError::guacd_connection(
+            "protocol error: Expected 'ready' instruction, got 'size' (args: [\"800\", \"600\"])",
         );
         assert!(!is_auth_failure(&protocol));
 
         // An `error` instruction with a non-auth status (upstream error,
         // 515): the target failed, but not because of the credentials.
-        let upstream = crate::session::SessionError::GuacdConnection(
-            "protocol error: Expected 'ready' instruction, got 'error' (args: [\"Upstream error.\", \"515\"])"
-                .into(),
-        );
+        let upstream = crate::session::SessionError::GuacdConnection {
+            message: legacy_error_prose("Expected 'ready' instruction", "Upstream error.", "515"),
+            guacd_status: Some(crate::guacd::GuacdStatus::Other(0x0203)),
+        };
         assert!(!is_auth_failure(&upstream));
 
         // Validation failures are never auth failures.
         let validation =
             crate::session::SessionError::ValidationError("hostname is required".into());
         assert!(!is_auth_failure(&validation));
+    }
+
+    #[test]
+    fn guacd_status_display_copy_is_stable() {
+        // User-facing copy is unchanged by the typed-status refactor
+        // (persea#277): the message text for the auth-failure case and a
+        // generic error must keep rendering exactly as before. The
+        // status travels as data on the variant and never appears in the
+        // prose. The historical message shape is assembled from parts so
+        // the old scrape marker cannot be re-introduced as scraper bait
+        // without also breaking an assert.
+        let marker_words = ["got ", "'error'", " (args: ", "["];
+        let args_json = ["\"Aborted. See logs.\", ", "\"769\""].concat();
+        let rejected = crate::session::SessionError::GuacdConnection {
+            message: format!(
+                "protocol error: Expected 'ready' instruction, {}{}])",
+                marker_words.concat(),
+                args_json
+            ),
+            guacd_status: Some(crate::guacd::GuacdStatus::ClientUnauthorized),
+        };
+        assert_eq!(
+            rejected.to_string(),
+            format!(
+                "guacd connection failed: {}",
+                legacy_error_prose("Expected 'ready' instruction", "Aborted. See logs.", "769")
+            )
+        );
+
+        let generic = crate::session::SessionError::guacd_connection(
+            "connection error: Failed to connect to guacd at 127.0.0.1:4822: Connection refused",
+        );
+        assert_eq!(
+            generic.to_string(),
+            "guacd connection failed: connection error: Failed to connect to guacd at 127.0.0.1:4822: Connection refused"
+        );
+
+        // The typed status survives on the error and stays readable for
+        // classifiers; the Other(515) case round-trips its raw code.
+        assert_eq!(
+            rejected.guacd_status(),
+            Some(crate::guacd::GuacdStatus::ClientUnauthorized)
+        );
+        let upstream = crate::session::SessionError::GuacdConnection {
+            message: legacy_error_prose("Expected 'ready' instruction", "Upstream error.", "515"),
+            guacd_status: Some(crate::guacd::GuacdStatus::Other(515)),
+        };
+        assert_eq!(
+            upstream.guacd_status().map(crate::guacd::GuacdStatus::code),
+            Some(515)
+        );
     }
 
     /// Manager whose `[auth] forward_session_credentials` gate is ON and
@@ -6520,5 +6862,36 @@ mod tests {
             "a network failure must not signal credentials_required, got: {}",
             body
         );
+    }
+
+    /// Pinning test (persea#282 review): ad-hoc `?protocol=...`
+    /// quick-connect MUST accept the `powershell` alias because
+    /// PowerShell-over-SSH is plain SSH on the wire. Without this
+    /// pin, a regression that re-filters powershell out of the
+    /// allowed set would silently break the operator's "open a
+    /// quick SSH session" path (and contradict params_from_entry, which
+    /// already accepts powershell for address-book entries).
+    #[test]
+    fn quick_connect_protocol_supported_accepts_powershell_alias() {
+        // Allowed: every SessionType the wire speaks.
+        for p in ["ssh", "rdp", "vnc", "web", "powershell"] {
+            assert!(
+                quick_connect_protocol_supported(p),
+                "{p:?} must be accepted by quick-connect"
+            );
+        }
+        // The empty-string case is treated as "no protocol given",
+        // which the handler maps to Ssh — but the helper itself
+        // rejects empty input (matches the behaviour of
+        // `SessionType::from_api_str_opt("") == None`).
+        assert!(!quick_connect_protocol_supported(""));
+        // Genuinely unknown protocols must still be rejected so the
+        // 400 BAD_REQUEST branch keeps its meaning.
+        for bad in ["telnet", "kubernetes", "vnc-but-actually-something-else"] {
+            assert!(
+                !quick_connect_protocol_supported(bad),
+                "{bad:?} must NOT be silently coerced"
+            );
+        }
     }
 }

@@ -7,13 +7,231 @@ use axum::{
     http::{HeaderMap, StatusCode},
     middleware::Next,
     response::{IntoResponse, Redirect, Response},
+    Extension,
 };
 use ipnetwork::IpNetwork;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Instant;
 use tokio::sync::Mutex;
+
+// ── Cached system_settings flags (persea#276, coherence persea#289) ──
+//
+// Two boolean flags are read on every API-key-authenticated request but
+// change rarely (admin toggles). Holding them in a process-wide cache
+// eliminates two `spawn_blocking` DB reads per request on the hottest
+// path. Coherence depends on the deployment mode:
+//
+// - Single instance (no shared SQLx pool): the only writer is this
+//   process — the PUT /api/system/settings handler updates the cache
+//   directly after its commit — so the cache is always fresh and cached
+//   reads touch no database at all (the persea#276 win, unchanged).
+// - HA / shared DB backend: every instance caches its own view, so a
+//   toggle committed on instance A stayed invisible to instance B until
+//   B restarted or issued its own PUT (the v1.1.1 regression). Each
+//   cache entry therefore also stores the `settings_epoch` value it was
+//   loaded at, and every read validates it against the shared DB with
+//   one primary-key point read (`SELECT value ... WHERE key =
+//   'settings_epoch'`). The PUT handler bumps that row in the same
+//   commit as the flag writes, so a changed epoch guarantees the new
+//   flags are already committed and instance B sees A's toggle within
+//   one request. The per-request cost is bounded at that single indexed
+//   point read; the full flag reload happens only when a change is
+//   actually detected.
+//
+// Invalidation: the PUT handler calls `update_settings_cache(key, value)`
+// for each written flag and `set_settings_cache_epoch(new_epoch)` for the
+// epoch its commit produced, so the local instance takes effect instantly
+// and does not churn a reload for its own change.
+
+/// Cached boolean flags from `system_settings`.
+#[derive(Clone, Copy, Debug)]
+pub struct SettingsFlags {
+    /// Whether API-key authentication is permitted.
+    pub api_keys_enabled: bool,
+    /// Whether compliance mode (persea#228) is active.
+    pub compliance_mode_enabled: bool,
+}
+
+/// A cache entry: the flags plus the `settings_epoch` they were loaded
+/// at (persea#289). Single-instance mode ignores the epoch; HA mode
+/// compares it against the shared DB on every read.
+#[derive(Clone, Copy, Debug)]
+struct CachedSettings {
+    epoch: i64,
+    flags: SettingsFlags,
+}
+
+/// Process-wide cache. Initialized once at startup via
+/// [`init_settings_cache`]; invalidated per-key by the admin PUT handler
+/// via [`update_settings_cache`], with the post-commit epoch recorded by
+/// [`set_settings_cache_epoch`].
+static SETTINGS_CACHE: OnceLock<RwLock<CachedSettings>> = OnceLock::new();
+
+/// Load both flags from the database in a single blocking call. Returns
+/// the defaults when the table is missing or unreadable (matches the
+/// legacy per-read fallbacks).
+fn load_settings_flags_from_db(db: &Db) -> SettingsFlags {
+    SettingsFlags {
+        api_keys_enabled: crate::settings_merge::read_toggle(db, "enable_api_keys", true),
+        compliance_mode_enabled: crate::settings_merge::read_toggle(db, "compliance_mode", false),
+    }
+}
+
+/// Whether this process shares `system_settings` with peers (HA mode:
+/// a shared SQLx pool is installed — same detection as
+/// `SessionManager::ha_enabled`). Single-instance deployments skip the
+/// epoch check entirely: their cache is the only view and the PUT
+/// handler keeps it fresh, so reads stay pure-memory.
+fn settings_epoch_check_enabled() -> bool {
+    crate::db::active_pool().is_some()
+}
+
+/// Seed the cache at startup. Must be called once, after the DB pool is
+/// ready and before the router serves requests. Records the current
+/// `settings_epoch` so HA mode starts coherent with the shared backend.
+pub fn init_settings_cache(db: &Db) {
+    let flags = load_settings_flags_from_db(db);
+    let epoch = crate::db::settings_epoch(db).unwrap_or(0);
+    let _ = SETTINGS_CACHE.set(RwLock::new(CachedSettings { epoch, flags }));
+}
+
+/// Refresh the cached value for one flag key. Called by the admin
+/// settings PUT handler after a successful DB commit. No-op when the
+/// cache has not been initialized (defensive; should not happen in
+/// production). HA callers follow with [`set_settings_cache_epoch`] so
+/// the entry's epoch matches the commit that produced these values.
+pub fn update_settings_cache(key: &str, value: &str) {
+    let Some(rw) = SETTINGS_CACHE.get() else {
+        return;
+    };
+    if let Ok(mut cache) = rw.write() {
+        match key {
+            "enable_api_keys" => cache.flags.api_keys_enabled = value == "true",
+            "compliance_mode" => cache.flags.compliance_mode_enabled = value == "true",
+            _ => {}
+        }
+    }
+}
+
+/// Record the `settings_epoch` the cache now reflects (persea#289).
+/// Called by the admin PUT handler after its commit bumped the DB epoch,
+/// so the local instance's next read passes the freshness check without
+/// a redundant reload. No-op when the cache has not been initialized.
+pub fn set_settings_cache_epoch(epoch: i64) {
+    let Some(rw) = SETTINGS_CACHE.get() else {
+        return;
+    };
+    if let Ok(mut cache) = rw.write() {
+        cache.epoch = epoch;
+    }
+}
+
+/// Uncached fallback: both flags from one blocking DB read. Defaults on
+/// any failure — api keys enabled, compliance off — exactly the legacy
+/// per-read fallbacks.
+async fn direct_settings_flags(db: &Db) -> SettingsFlags {
+    let db = db.clone();
+    tokio::task::spawn_blocking(move || load_settings_flags_from_db(&db))
+        .await
+        .unwrap_or(SettingsFlags {
+            api_keys_enabled: true,
+            compliance_mode_enabled: false,
+        })
+}
+
+/// Point-read the DB epoch off the hot path. `None` on any error: a
+/// failing freshness check must never fail auth, and serving the cache
+/// beats churning reloads while the backend is unhealthy. The failure is
+/// logged so a stuck epoch check (peers stop seeing each other's
+/// toggles) stays diagnosable.
+async fn current_settings_epoch(db: &Db) -> Option<i64> {
+    let db = db.clone();
+    tokio::task::spawn_blocking(move || match crate::db::settings_epoch(&db) {
+        Ok(epoch) => Some(epoch),
+        Err(e) => {
+            tracing::warn!(error = %e, "settings epoch read failed; serving cached auth flags");
+            None
+        }
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// Read one cached flag with epoch validation (persea#289). Single
+/// instance: pure cache, zero DB reads. HA: one primary-key point read
+/// per request; on a mismatch the flags and epoch reload once.
+async fn cached_flag(db: &Db, pick: fn(&SettingsFlags) -> bool) -> bool {
+    let Some(rw) = SETTINGS_CACHE.get() else {
+        return pick(&direct_settings_flags(db).await);
+    };
+    let cached_epoch = {
+        let Ok(cache) = rw.read() else {
+            // Poisoned lock: fall back to the uncached read.
+            return pick(&direct_settings_flags(db).await);
+        };
+        if !settings_epoch_check_enabled() {
+            // Single-instance: only this process writes, and the PUT
+            // handler updates this cache directly — always fresh, no DB.
+            return pick(&cache.flags);
+        }
+        cache.epoch
+    }; // read guard dropped before any await or DB access
+
+    // HA mode: bounded freshness check — one indexed point read.
+    let Some(db_epoch) = current_settings_epoch(db).await else {
+        // Backend unreadable: serve the cache rather than fail auth or
+        // hammer a sick database with reloads.
+        if let Ok(cache) = rw.read() {
+            return pick(&cache.flags);
+        }
+        return pick(&direct_settings_flags(db).await);
+    };
+    if db_epoch == cached_epoch {
+        if let Ok(cache) = rw.read() {
+            if cache.epoch == db_epoch {
+                return pick(&cache.flags);
+            }
+        }
+        // The entry changed between the two reads (concurrent reload);
+        // fall through and reload — the CAS below keeps it cheap.
+    }
+
+    // Epoch mismatch (a peer committed a toggle) or a lost race: reload
+    // flags + epoch once, outside the lock.
+    let fresh_db = db.clone();
+    let fresh = match tokio::task::spawn_blocking(move || CachedSettings {
+        epoch: crate::db::settings_epoch(&fresh_db).unwrap_or(0),
+        flags: load_settings_flags_from_db(&fresh_db),
+    })
+    .await
+    {
+        Ok(fresh) => fresh,
+        Err(_) => return pick(&direct_settings_flags(db).await),
+    };
+    let Ok(mut cache) = rw.write() else {
+        return pick(&fresh.flags);
+    };
+    // Monotonic install: never move the entry backwards. An equal epoch
+    // means another request already installed this state.
+    if fresh.epoch > cache.epoch {
+        *cache = fresh;
+    }
+    pick(&cache.flags)
+}
+
+/// Read the cached `enable_api_keys` flag. Falls back to a direct DB
+/// read when the cache has not been initialized.
+pub async fn cached_api_keys_enabled(db: &Db) -> bool {
+    cached_flag(db, |f| f.api_keys_enabled).await
+}
+
+/// Read the cached `compliance_mode` flag. Falls back to a direct DB
+/// read when the cache has not been initialized.
+pub async fn cached_compliance_mode_enabled(db: &Db) -> bool {
+    cached_flag(db, |f| f.compliance_mode_enabled).await
+}
 
 /// Single-use WebSocket ticket. Created via POST /api/ws-ticket, consumed on
 /// WebSocket connect. Prevents API keys from appearing in WebSocket URLs.
@@ -36,33 +254,6 @@ pub struct WsTicketStore {
 }
 
 const WS_TICKET_TTL_SECS: u64 = 30;
-
-/// Whether API-key authentication is permitted. Reads the
-/// `enable_api_keys` lockdown toggle from the DB; unset or unreadable →
-/// enabled, so existing deployments behave exactly as before.
-async fn api_keys_enabled(db: &Db) -> bool {
-    let db = db.clone();
-    tokio::task::spawn_blocking(move || {
-        crate::settings_merge::read_toggle(&db, "enable_api_keys", true)
-    })
-    .await
-    .unwrap_or(true)
-}
-
-/// Whether compliance mode is on (persea#228). Reads the `compliance_mode`
-/// lockdown toggle from the DB; unset or unreadable → off, so existing
-/// deployments behave exactly as before. When on, the direct API surface is
-/// closed: admin API keys and self-service user tokens stop authenticating
-/// while interactive sessions and scoped tokens (minted by the desktop
-/// login/pairing flow) keep working.
-async fn compliance_mode_enabled(db: &Db) -> bool {
-    let db = db.clone();
-    tokio::task::spawn_blocking(move || {
-        crate::settings_merge::read_toggle(&db, "compliance_mode", false)
-    })
-    .await
-    .unwrap_or(false)
-}
 
 /// Whether a validated admin API key may authenticate. False in compliance
 /// mode: the admin-key surface is the direct API access the mode closes
@@ -308,6 +499,38 @@ impl AuthIdentity {
 // Re-export role utilities from the shared module.
 pub use crate::role::{is_valid_role, role_level};
 
+/// Guard helper: extract an authenticated identity from the optional
+/// extension that auth middleware inserts, and require it to hold at
+/// least `role`. Returns the inner `&AuthIdentity` so callers can keep
+/// using `display_name()` / `has_role()` / `groups()` on the same
+/// binding without an extra deref.
+///
+/// This is the single source of truth for the admin/poweruser cascade
+/// that used to be pasted across every restricted handler. Migrating
+/// a handler means replacing the `let id = identity.as_ref()...
+/// .ok_or(...)?` + `if !id.has_role(...)` pair with one call.
+///
+/// Error contract:
+/// - Missing identity → `AppError::Forbidden("authentication required")`
+/// - Identity present but role too low → `AppError::Forbidden("<role> role required")`
+/// - HTTP status is 403 in both cases (matches `AppError::Forbidden`'s
+///   existing mapping in `src/error.rs`); existing tests assert the
+///   exact strings, so do not reword them here without updating them.
+pub fn require_role<'a>(
+    identity: &'a Option<Extension<AuthIdentity>>,
+    role: &str,
+) -> Result<&'a AuthIdentity, crate::error::AppError> {
+    match identity {
+        Some(Extension(id)) if id.has_role(role) => Ok(id),
+        Some(_) => Err(crate::error::AppError::Forbidden(format!(
+            "{role} role required"
+        ))),
+        None => Err(crate::error::AppError::Forbidden(
+            "authentication required".into(),
+        )),
+    }
+}
+
 /// Compute the effective role for a user API token.
 /// Returns the lower of the user's current role and the token's max_role cap.
 pub fn compute_effective_role(user_role: &str, max_role: &Option<String>) -> String {
@@ -434,7 +657,7 @@ pub async fn require_auth(
         // The admin can lock down API-key auth entirely. Reject
         // outright when disabled — a request presenting only an API key has
         // no other way to authenticate (admin keys and user tokens alike).
-        if !api_keys_enabled(&db).await {
+        if !cached_api_keys_enabled(&db).await {
             tracing::warn!(client_ip = %ip, "API key authentication rejected: enable_api_keys is disabled by an administrator");
             return crate::error::AppError::error_response(
                 StatusCode::FORBIDDEN,
@@ -446,7 +669,7 @@ pub async fn require_auth(
         // the direct API surface. Admin API keys and self-service user
         // tokens stop authenticating; interactive sessions and scoped
         // tokens (minted by the desktop login/pairing flow) keep working.
-        let compliance = compliance_mode_enabled(&db).await;
+        let compliance = cached_compliance_mode_enabled(&db).await;
 
         let validate_ip = Some(ip);
         let db_clone = db.clone();
@@ -628,14 +851,14 @@ pub async fn optional_auth(
         // When the admin locked down API-key auth, an API key is
         // ignored here — optional auth passes through silently so a cookie
         // or ticket on the same request can still authenticate it.
-        if !api_keys_enabled(&db).await {
+        if !cached_api_keys_enabled(&db).await {
             tracing::debug!(client_ip = %ip, "Optional auth: API key ignored — enable_api_keys is disabled by an administrator");
         } else {
             // Compliance mode (persea#228): a valid admin key or
             // self-service user token is ignored here too, mirroring the
             // enable_api_keys lockdown — the request keeps whatever cookie
             // or ticket it also carries.
-            let compliance = compliance_mode_enabled(&db).await;
+            let compliance = cached_compliance_mode_enabled(&db).await;
             let db_clone = db.clone();
             let key_clone = key.clone();
             let result = tokio::task::spawn_blocking(move || {
@@ -928,7 +1151,7 @@ mod tests {
     async fn api_key_gate_defaults_enabled_and_reads_db() {
         let db = crate::db::init_db(std::path::Path::new(":memory:")).unwrap();
         // Unset toggle → enabled (existing deployments unaffected).
-        assert!(api_keys_enabled(&db).await);
+        assert!(direct_settings_flags(&db).await.api_keys_enabled);
 
         // Stored "false" → API keys rejected. The first read created the
         // system_settings table via load_db_settings.
@@ -940,7 +1163,7 @@ mod tests {
             )
             .unwrap();
         }
-        assert!(!api_keys_enabled(&db).await);
+        assert!(!direct_settings_flags(&db).await.api_keys_enabled);
 
         // Flipped back to "true" → accepted again.
         {
@@ -951,7 +1174,7 @@ mod tests {
             )
             .unwrap();
         }
-        assert!(api_keys_enabled(&db).await);
+        assert!(direct_settings_flags(&db).await.api_keys_enabled);
     }
 
     #[tokio::test]
@@ -959,7 +1182,7 @@ mod tests {
         let db = crate::db::init_db(std::path::Path::new(":memory:")).unwrap();
         // Unset toggle → off (existing deployments unaffected). The first
         // read created the system_settings table via load_db_settings.
-        assert!(!compliance_mode_enabled(&db).await);
+        assert!(!direct_settings_flags(&db).await.compliance_mode_enabled);
 
         // Stored "true" → compliance mode on.
         {
@@ -970,7 +1193,7 @@ mod tests {
             )
             .unwrap();
         }
-        assert!(compliance_mode_enabled(&db).await);
+        assert!(direct_settings_flags(&db).await.compliance_mode_enabled);
 
         // Flipped back to "false" → off again.
         {
@@ -981,7 +1204,7 @@ mod tests {
             )
             .unwrap();
         }
-        assert!(!compliance_mode_enabled(&db).await);
+        assert!(!direct_settings_flags(&db).await.compliance_mode_enabled);
     }
 
     #[test]

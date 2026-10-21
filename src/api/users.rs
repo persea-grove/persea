@@ -5,7 +5,7 @@
 //! own profile. All handlers except the `/me` ones require admin.
 use super::{VaultConfigured, VaultState};
 use crate::audit;
-use crate::auth::AuthIdentity;
+use crate::auth::{require_role, AuthIdentity};
 use crate::db::{self, Db};
 use crate::error::AppError;
 use crate::rbac;
@@ -79,13 +79,7 @@ pub async fn list_users(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let id = identity
-        .as_ref()
-        .map(|Extension(id)| id)
-        .ok_or(AppError::Forbidden("authentication required".into()))?;
-    if !id.has_role("admin") {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let db_clone = database.clone();
     let users = tokio::task::spawn_blocking(move || db::list_users(&db_clone))
@@ -131,13 +125,7 @@ pub async fn create_user(
     policy: Option<Extension<crate::password::PasswordPolicy>>,
     Json(body): Json<CreateUserRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
-    let id = identity
-        .as_ref()
-        .map(|Extension(id)| id)
-        .ok_or(AppError::Forbidden("authentication required".into()))?;
-    if !id.has_role("admin") {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     // Password policy: minimum length enforced at creation, and the
     // new hash goes into the per-user reuse history. Handlers fall back to
@@ -222,25 +210,20 @@ pub async fn create_user(
         .as_ref()
         .map(|id| id.display_name().to_string())
         .unwrap_or_default();
-    let email_audit = body.email.clone();
-    let role_audit = role.clone();
-    let custom_role_audit = custom_role_name.clone();
-    let db_audit = database.clone();
-    tokio::task::spawn_blocking(move || {
-        let _ = audit::log_event(
-            &db_audit,
-            &mut audit::EventBuilder::new("admin.user.create", "success")
-                .user_id(&admin_name)
-                .details(serde_json::json!({
-                    "email": email_audit,
-                    "role": role_audit,
-                    "custom_role": custom_role_audit
-                }))
-                .build(),
-        );
-    })
-    .await
-    .ok();
+    audit::fire(
+        &database,
+        Some(&admin_name),
+        "admin.user.create",
+        "success",
+        serde_json::json!({
+            "email": &body.email,
+            "role": &role,
+            "custom_role": &custom_role_name,
+        }),
+        None,
+        None,
+    )
+    .await;
 
     Ok((
         StatusCode::CREATED,
@@ -264,13 +247,7 @@ pub async fn update_user(
     Path(email): Path<String>,
     Json(body): Json<UpdateUserRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let id = identity
-        .as_ref()
-        .map(|Extension(id)| id)
-        .ok_or(AppError::Forbidden("authentication required".into()))?;
-    if !id.has_role("admin") {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     if body.name.is_none() && body.email.is_none() && body.password.is_none() {
         return Err(AppError::Validation("nothing to update".into()));
@@ -309,14 +286,7 @@ pub async fn update_user(
                     "email is managed by the identity provider for this user".into(),
                 ));
             }
-            let trimmed = new_email.trim();
-            if trimmed.is_empty()
-                || !trimmed.contains('@')
-                || trimmed.chars().any(char::is_whitespace)
-            {
-                return Err(AppError::Validation("invalid email address".into()));
-            }
-            Some(trimmed.to_string())
+            crate::validation::validate_email(Some(new_email))?
         }
         None => None,
     };
@@ -397,9 +367,6 @@ pub async fn update_user(
 
     // Audit: user edit (no secrets — just which fields changed).
     {
-        let db_audit = database.clone();
-        let email_audit = email.clone();
-        let new_email_audit = new_email.clone();
         let name_changed = new_name.is_some();
         let email_changed = new_email.is_some();
         let password_changed = body.password.is_some();
@@ -407,25 +374,22 @@ pub async fn update_user(
             .as_ref()
             .map(|id| id.display_name().to_string())
             .unwrap_or_default();
-        if let Err(e) = tokio::task::spawn_blocking(move || {
-            let _ = audit::log_event(
-                &db_audit,
-                &mut audit::EventBuilder::new("admin.user.edit", "success")
-                    .user_id(&admin_name)
-                    .details(serde_json::json!({
-                        "target_email": email_audit,
-                        "new_email": new_email_audit,
-                        "name_changed": name_changed,
-                        "email_changed": email_changed,
-                        "password_changed": password_changed,
-                    }))
-                    .build(),
-            );
-        })
-        .await
-        {
-            tracing::error!(error = %e, "audit task failed");
-        }
+        audit::fire(
+            &database,
+            Some(&admin_name),
+            "admin.user.edit",
+            "success",
+            serde_json::json!({
+                "target_email": &email,
+                "new_email": &new_email,
+                "name_changed": name_changed,
+                "email_changed": email_changed,
+                "password_changed": password_changed,
+            }),
+            None,
+            None,
+        )
+        .await;
     }
 
     Ok(Json(json!({
@@ -448,13 +412,7 @@ pub async fn set_user_role(
     Path(email): Path<String>,
     Json(req): Json<SetRoleRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let id = identity
-        .as_ref()
-        .map(|Extension(id)| id)
-        .ok_or(AppError::Forbidden("authentication required".into()))?;
-    if !id.has_role("admin") {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let role = req.role.unwrap_or_default();
 
@@ -547,33 +505,26 @@ pub async fn set_user_role(
 
     // Audit: role change
     {
-        let db_audit = database.clone();
-        let email_audit = email.clone();
-        let new_role = role.clone();
-        let new_custom_role = custom_role_name.clone();
         let admin_name = identity
             .as_ref()
             .map(|id| id.display_name().to_string())
             .unwrap_or_default();
-        if let Err(e) = tokio::task::spawn_blocking(move || {
-            let _ = audit::log_event(
-                &db_audit,
-                &mut audit::EventBuilder::new("admin.role.change", "success")
-                    .user_id(&admin_name)
-                    .details(serde_json::json!({
-                        "target_email": email_audit,
-                        "old_role": old_role,
-                        "new_role": new_role,
-                        "old_custom_role_id": old_custom_role_id,
-                        "new_custom_role": new_custom_role,
-                    }))
-                    .build(),
-            );
-        })
-        .await
-        {
-            tracing::error!(error = %e, "audit task failed");
-        }
+        audit::fire(
+            &database,
+            Some(&admin_name),
+            "admin.role.change",
+            "success",
+            serde_json::json!({
+                "target_email": &email,
+                "old_role": old_role,
+                "new_role": &role,
+                "old_custom_role_id": old_custom_role_id,
+                "new_custom_role": &custom_role_name,
+            }),
+            None,
+            None,
+        )
+        .await;
     }
 
     // Response carries the post-change state so the UI can refresh badges.
@@ -604,13 +555,7 @@ pub async fn delete_user(
     Extension(database): Extension<Db>,
     Path(email): Path<String>,
 ) -> Result<StatusCode, AppError> {
-    let id = identity
-        .as_ref()
-        .map(|Extension(id)| id)
-        .ok_or(AppError::Forbidden("authentication required".into()))?;
-    if !id.has_role("admin") {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let db_clone = database.clone();
     let email_for_delete = email.clone();
@@ -618,25 +563,20 @@ pub async fn delete_user(
         Ok(Ok(true)) => {
             // Audit: user delete
             {
-                let db_audit = database.clone();
-                let email_audit = email.clone();
                 let admin_name = identity
                     .as_ref()
                     .map(|id| id.display_name().to_string())
                     .unwrap_or_default();
-                if let Err(e) = tokio::task::spawn_blocking(move || {
-                    let _ = audit::log_event(
-                        &db_audit,
-                        &mut audit::EventBuilder::new("admin.user.delete", "success")
-                            .user_id(&admin_name)
-                            .details(serde_json::json!({"target_email": email_audit}))
-                            .build(),
-                    );
-                })
-                .await
-                {
-                    tracing::error!(error = %e, "audit task failed");
-                }
+                audit::fire(
+                    &database,
+                    Some(&admin_name),
+                    "admin.user.delete",
+                    "success",
+                    serde_json::json!({"target_email": &email}),
+                    None,
+                    None,
+                )
+                .await;
             }
             Ok(StatusCode::NO_CONTENT)
         }
@@ -660,13 +600,7 @@ pub async fn delete_user_sessions(
     Extension(database): Extension<Db>,
     Path(email): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let db_clone = database.clone();
     let email_clone = email.clone();
@@ -680,8 +614,47 @@ pub async fn delete_user_sessions(
     let count = tokio::task::spawn_blocking(move || db::delete_user_sessions(&db_clone, user_id))
         .await
         .map_err(|e| AppError::Internal(e.to_string()))??;
-    tracing::info!(email = %email, sessions_revoked = count, "Admin force-logout user");
-    Ok(Json(json!({"ok": true, "sessions_revoked": count})))
+
+    // Revoke all derived tokens (scoped desktop tokens, etc.) so they
+    // cannot outlive the sessions they were created from.
+    let db_clone = database.clone();
+    let tokens_revoked =
+        tokio::task::spawn_blocking(move || db::revoke_all_user_tokens(&db_clone, user_id))
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))??;
+
+    tracing::info!(
+        email = %email,
+        sessions_revoked = count,
+        tokens_revoked = tokens_revoked,
+        "Admin force-logout user"
+    );
+
+    // Audit: force-logout including token revocation.
+    {
+        let admin_name = identity
+            .as_ref()
+            .map(|id| id.display_name().to_string())
+            .unwrap_or_default();
+        audit::fire(
+            &database,
+            Some(&admin_name),
+            "admin.user.force_logout",
+            "success",
+            serde_json::json!({
+                "target_email": &email,
+                "sessions_revoked": count,
+                "tokens_revoked": tokens_revoked,
+            }),
+            None,
+            None,
+        )
+        .await;
+    }
+
+    Ok(Json(
+        json!({"ok": true, "sessions_revoked": count, "tokens_revoked": tokens_revoked}),
+    ))
 }
 
 /// `GET /api/me`: the current user's profile, including role,
@@ -824,19 +797,13 @@ pub async fn update_me(
                     "email is managed by the identity provider for this user".into(),
                 ));
             }
-            let trimmed = new_email.trim();
-            if trimmed.is_empty()
-                || !trimmed.contains('@')
-                || trimmed.chars().any(char::is_whitespace)
-            {
-                return Err(AppError::Validation("invalid email address".into()));
-            }
+            let email = crate::validation::validate_email(Some(new_email))?;
             if body.current_password.as_deref().unwrap_or("").is_empty() {
                 return Err(AppError::Validation(
                     "current password is required to change your email".into(),
                 ));
             }
-            Some(trimmed.to_string())
+            email
         }
         None => None,
     };
@@ -904,13 +871,7 @@ pub async fn disable_user(
     Extension(database): Extension<Db>,
     Path(email): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let db_clone = database.clone();
     let email_for_disable = email.clone();
@@ -921,25 +882,20 @@ pub async fn disable_user(
     if found {
         // Audit: user disable
         {
-            let db_audit = database.clone();
-            let email_audit = email.clone();
             let admin_name = identity
                 .as_ref()
                 .map(|id| id.display_name().to_string())
                 .unwrap_or_default();
-            if let Err(e) = tokio::task::spawn_blocking(move || {
-                let _ = audit::log_event(
-                    &db_audit,
-                    &mut audit::EventBuilder::new("admin.user.disable", "success")
-                        .user_id(&admin_name)
-                        .details(serde_json::json!({"target_email": email_audit}))
-                        .build(),
-                );
-            })
-            .await
-            {
-                tracing::error!(error = %e, "audit task failed");
-            }
+            audit::fire(
+                &database,
+                Some(&admin_name),
+                "admin.user.disable",
+                "success",
+                serde_json::json!({"target_email": &email}),
+                None,
+                None,
+            )
+            .await;
         }
         Ok(Json(json!({"ok": true})))
     } else {
@@ -954,13 +910,7 @@ pub async fn enable_user(
     Extension(database): Extension<Db>,
     Path(email): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let db_clone = database.clone();
     let email_for_enable = email.clone();
@@ -970,25 +920,20 @@ pub async fn enable_user(
     if found {
         // Audit: user enable
         {
-            let db_audit = database.clone();
-            let email_audit = email.clone();
             let admin_name = identity
                 .as_ref()
                 .map(|id| id.display_name().to_string())
                 .unwrap_or_default();
-            if let Err(e) = tokio::task::spawn_blocking(move || {
-                let _ = audit::log_event(
-                    &db_audit,
-                    &mut audit::EventBuilder::new("admin.user.enable", "success")
-                        .user_id(&admin_name)
-                        .details(serde_json::json!({"target_email": email_audit}))
-                        .build(),
-                );
-            })
-            .await
-            {
-                tracing::error!(error = %e, "audit task failed");
-            }
+            audit::fire(
+                &database,
+                Some(&admin_name),
+                "admin.user.enable",
+                "success",
+                serde_json::json!({"target_email": &email}),
+                None,
+                None,
+            )
+            .await;
         }
         Ok(Json(json!({"ok": true})))
     } else {
@@ -1002,13 +947,7 @@ pub async fn list_group_mappings(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let db_clone = database.clone();
     let mappings = tokio::task::spawn_blocking(move || db::list_group_mappings(&db_clone))
@@ -1023,13 +962,7 @@ pub async fn list_known_groups(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let db_clone = database.clone();
     let groups = tokio::task::spawn_blocking(move || db::list_known_groups(&db_clone))
@@ -1046,13 +979,7 @@ pub async fn create_group_mapping(
     Extension(database): Extension<Db>,
     Json(req): Json<CreateGroupMappingRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     if !crate::auth::is_valid_role(&req.role) {
         return Err(AppError::Internal(
@@ -1078,30 +1005,24 @@ pub async fn create_group_mapping(
     })?;
     // Audit: config change
     {
-        let db_audit = database.clone();
-        let group = req.group.clone();
-        let role = req.role.clone();
         let admin_name = identity
             .as_ref()
             .map(|id| id.display_name().to_string())
             .unwrap_or_default();
-        if let Err(e) = tokio::task::spawn_blocking(move || {
-            let _ = audit::log_event(
-                &db_audit,
-                &mut audit::EventBuilder::new("admin.config.change", "success")
-                    .user_id(&admin_name)
-                    .details(serde_json::json!({
-                        "action": "create_group_mapping",
-                        "group": group,
-                        "role": role,
-                    }))
-                    .build(),
-            );
-        })
-        .await
-        {
-            tracing::error!(error = %e, "audit task failed");
-        }
+        audit::fire(
+            &database,
+            Some(&admin_name),
+            "admin.config.change",
+            "success",
+            serde_json::json!({
+                "action": "create_group_mapping",
+                "group": &req.group,
+                "role": &req.role,
+            }),
+            None,
+            None,
+        )
+        .await;
     }
     Ok(Json(json!(mapping)))
 }
@@ -1115,13 +1036,7 @@ pub async fn update_group_mapping(
     Path(id): Path<i64>,
     Json(req): Json<UpdateGroupMappingRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     if !crate::auth::is_valid_role(&req.role) {
         return Err(AppError::Internal(
@@ -1158,40 +1073,30 @@ pub async fn delete_group_mapping(
     Extension(database): Extension<Db>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let db_clone = database.clone();
     match tokio::task::spawn_blocking(move || db::delete_group_mapping(&db_clone, id)).await {
         Ok(Ok(true)) => {
             // Audit: config change
             {
-                let db_audit = database.clone();
                 let admin_name = identity
                     .as_ref()
                     .map(|id| id.display_name().to_string())
                     .unwrap_or_default();
-                if let Err(e) = tokio::task::spawn_blocking(move || {
-                    let _ = audit::log_event(
-                        &db_audit,
-                        &mut audit::EventBuilder::new("admin.config.change", "success")
-                            .user_id(&admin_name)
-                            .details(serde_json::json!({
-                                "action": "delete_group_mapping",
-                                "mapping_id": id,
-                            }))
-                            .build(),
-                    );
-                })
-                .await
-                {
-                    tracing::error!(error = %e, "audit task failed");
-                }
+                audit::fire(
+                    &database,
+                    Some(&admin_name),
+                    "admin.config.change",
+                    "success",
+                    serde_json::json!({
+                        "action": "delete_group_mapping",
+                        "mapping_id": id,
+                    }),
+                    None,
+                    None,
+                )
+                .await;
             }
             Ok(StatusCode::NO_CONTENT)
         }

@@ -226,11 +226,11 @@ async fn handshake_with_timeout(
     )
     .await
     .map_err(|_| {
-        SessionError::GuacdConnection(
-            "timeout connecting to guacd during session-creation handshake".into(),
+        SessionError::guacd_connection(
+            "timeout connecting to guacd during session-creation handshake",
         )
     })?
-    .map_err(|e| SessionError::GuacdConnection(e.to_string()))
+    .map_err(|e| SessionError::from_guacd_error(&e))
 }
 
 /// Count sessions in Pending|Active state: the only states that hold a
@@ -1474,9 +1474,7 @@ impl SessionManager {
                 let ((), (stream, connection_id)) = tokio::try_join!(
                     async {
                         if let Some((h, p, nets)) = pending_net_check.take() {
-                            check_allowed_network(&h, p, &nets)
-                                .await
-                                .map_err(|e| e.to_string())
+                            check_allowed_network(&h, p, &nets).await
                         } else {
                             Ok(())
                         }
@@ -1489,10 +1487,8 @@ impl SessionManager {
                             super::manager::GUACD_IO_TIMEOUT,
                         )
                         .await
-                        .map_err(|e| e.to_string())
                     }
-                )
-                .map_err(SessionError::GuacdConnection)?;
+                )?;
                 (stream, connection_id)
             } else {
                 if let Some((h, p, nets)) = pending_net_check.take() {
@@ -1889,18 +1885,7 @@ fn parse_autofill_credentials(
 /// input carries no explicit port. Used to tunnel Proxmox's PVE API and SPICE
 /// proxy endpoints through a jump-host chain.
 fn parse_host_port(input: &str, default_port: u16) -> Result<(String, u16), SessionError> {
-    let parsed = if input.contains("://") {
-        Url::parse(input)
-    } else {
-        Url::parse(&format!("tcp://{input}"))
-    }
-    .map_err(|e| SessionError::ValidationError(format!("invalid host/URL '{input}': {e}")))?;
-    let host = parsed
-        .host_str()
-        .ok_or_else(|| SessionError::ValidationError(format!("no host in '{input}'")))?
-        .to_string();
-    let port = parsed.port().unwrap_or(default_port);
-    Ok((host, port))
+    crate::net_util::parse_host_port(input, default_port).map_err(SessionError::ValidationError)
 }
 
 /// Link-local / cloud-metadata networks denied as session targets
@@ -2079,7 +2064,13 @@ fn entry_auto_size(db: &Option<crate::db::Db>, address_book_entry: Option<&str>)
     let entry = &key[last + 1..];
     let folder_rec = crate::db::get_ab_folder(db, scope, folder).ok()?;
     let entry_rec = crate::db::get_ab_entry(db, folder_rec.id, entry).ok()?;
-    if !matches!(entry_rec.protocol.as_str(), "rdp" | "ssh" | "powershell") {
+    // Per-entry `auto_size` only lives on rdp/ssh/powershell entries
+    // (powershell is the SSH alias). Anything else returns None so the
+    // caller falls back to the global default.
+    if !matches!(
+        SessionType::from_api_str_opt(&entry_rec.protocol),
+        Some(SessionType::Rdp) | Some(SessionType::Ssh)
+    ) {
         return None;
     }
     let config: serde_json::Value = serde_json::from_str(&entry_rec.protocol_config).ok()?;

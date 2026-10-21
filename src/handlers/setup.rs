@@ -2,10 +2,11 @@ use axum::extract::Form;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Extension;
 use serde::Deserialize;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::api::SiteTitle;
-use crate::config::Config;
+use crate::config::{storage_section_for, toml_escape, Config};
 use crate::db_pool::{DbKind, DbPool};
 use crate::templates::SetupTemplate;
 use crate::CspNonce;
@@ -18,6 +19,17 @@ use crate::CspNonce;
 /// wizard, a store that already has users is gated by `needs_setup()` above,
 /// and a failed creation resets it so the first attempt can be retried.
 static FIRST_ADMIN_CLAIMED: AtomicBool = AtomicBool::new(false);
+
+/// Resolved on-disk path the setup wizard will write to. Threaded as an
+/// axum `Extension` from `main.rs` so the wizard writes where the server
+/// was actually started (`--config <path>`), not the hardcoded
+/// `/opt/persea/config.toml` it used to default to (persea#290).
+///
+/// Precedence: `RUSTGUAC_CONFIG` env > `--config` arg > Windows default >
+/// `/opt/persea/config.toml`. See
+/// `crate::config::resolve_wizard_config_path` for the pure resolver.
+#[derive(Debug, Clone)]
+pub struct WizardConfigPath(pub PathBuf);
 
 /// Form body of the setup wizard (POST /setup).
 #[derive(Debug, Deserialize)]
@@ -65,24 +77,6 @@ fn detect_ips() -> Vec<String> {
     ips
 }
 
-/// Escape a value for embedding in a TOML basic string so crafted input
-/// cannot break out of the quoted literal or inject further keys.
-fn toml_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out
-}
-
 /// Human-readable label for the active backend (setup page indicator).
 fn backend_label(kind: DbKind) -> &'static str {
     match kind {
@@ -97,14 +91,6 @@ fn current_backend() -> Option<String> {
     crate::db::active_pool()
         .and_then(|p| p.kind())
         .map(|b| backend_label(b).to_string())
-}
-
-/// Generate a fresh 64-char hex storage encryption key (32 bytes).
-fn generate_storage_key() -> String {
-    use rand::RngExt;
-    let mut buf = [0u8; 32];
-    rand::rng().fill(&mut buf);
-    hex::encode(buf)
 }
 
 /// Extract a named top-level section (header + body) from a config file,
@@ -134,38 +120,6 @@ fn extract_section(text: &str, name: &str) -> Option<String> {
 fn read_section(config_path: &str, name: &str) -> Option<String> {
     let existing = std::fs::read_to_string(config_path).ok()?;
     extract_section(&existing, name)
-}
-
-/// Whether a `[storage]` section body already sets `encryption_key`.
-fn section_has_key(section: &str) -> bool {
-    section.lines().any(|l| {
-        let t = l.trim_start();
-        t.starts_with("encryption_key") && t.contains('=')
-    })
-}
-
-/// The `[storage]` section to write into the generated config: the existing
-/// section verbatim (so an admin-set encryption key survives the wizard's
-/// rewrite — overwriting the config without it would make the server refuse
-/// to start on the next boot), with a fresh key added when the section has
-/// none. A fresh section with a new key when the config has no `[storage]`
-/// at all: the generated config always carries a key.
-///
-/// `[tls]` is preserved the same way (see `tls_section_for`); both sections
-/// are extracted with `extract_section`.
-fn storage_section_for(config_path: &str) -> String {
-    match read_section(config_path, "storage") {
-        Some(section) if section_has_key(&section) => section,
-        Some(section) => format!(
-            "{}\nencryption_key = \"{}\"\n",
-            section.trim_end(),
-            generate_storage_key()
-        ),
-        None => format!(
-            "[storage]\nencryption_key = \"{}\"\n",
-            generate_storage_key()
-        ),
-    }
 }
 
 /// The `[tls]` section to write into the generated config: the existing
@@ -260,6 +214,7 @@ pub async fn setup_submit(
     Extension(config): Extension<Config>,
     Extension(database): Extension<crate::db::Db>,
     Extension(nonce): Extension<CspNonce>,
+    Extension(WizardConfigPath(config_path)): Extension<WizardConfigPath>,
     Form(form): Form<SetupForm>,
 ) -> Response {
     if !needs_setup(&database) {
@@ -437,12 +392,19 @@ pub async fn setup_submit(
         format!("db_url = \"{}\"", toml_escape(&db_url))
     };
 
-    // Write to config path (same as the --config arg, or default location)
-    let config_path =
-        std::env::var("RUSTGUAC_CONFIG").unwrap_or_else(|_| "/opt/persea/config.toml".to_string());
+    // Write to config path. `config_path` is threaded in as an axum
+    // Extension from main.rs, so it tracks whatever the server was
+    // actually started with (--config <path>, RUSTGUAC_CONFIG, or the
+    // platform default — see crate::config::resolve_wizard_config_path).
+    // Pre-fix, the wizard read RUSTGUAC_CONFIG itself and silently fell
+    // back to /opt/persea, ignoring --config: dev runs and any custom
+    // path emitted a "Could not write config" warn even though setup
+    // still completed (persea#290).
+    let config_path = config_path.to_string_lossy().into_owned();
 
     // The storage section holds the credential encryption key: preserve an
-    // existing one verbatim and always emit a key (see storage_section_for).
+    // existing one verbatim and always emit a key (single implementation in
+    // crate::config, shared with ensure-storage-key and the startup guard).
     // An existing [tls] section is preserved verbatim too (see
     // tls_section_for): dropping it would downgrade an HTTPS deployment to
     // plain HTTP at the next restart.
@@ -471,9 +433,18 @@ session_history_retention_days = 90
         storage_section
     );
 
-    if let Err(e) = std::fs::write(&config_path, &config) {
-        tracing::warn!("Could not write config to {}: {}", config_path, e);
-        // Non-fatal — user can create config manually
+    let write_result = std::fs::write(&config_path, &config);
+    if let Err(ref e) = write_result {
+        // Best-effort write: setup still completes (admin is created in
+        // the active store), but surface the skip to the operator. The
+        // warn logs the resolved path; the redirect's query param lets
+        // the login page flag it for the operator too (persea#290).
+        tracing::warn!(
+            path = %config_path,
+            error = %e,
+            "Could not write config file; setup will still complete — re-run or \
+             edit the config manually at this path"
+        );
     } else {
         // The written config holds the encryption key: not world-readable.
         #[cfg(unix)]
@@ -489,11 +460,20 @@ session_history_retention_days = 90
         listen = %form.listen_addr,
         guacd_addr = %form.guacd_addr,
         db_url_set = !db_url.is_empty(),
+        config_path = %config_path,
+        config_written = write_result.is_ok(),
         "Setup completed"
     );
 
-    // Redirect to login
-    Redirect::to("/?setup=complete").into_response()
+    // Redirect to login. On a skipped config write, add a flag so the
+    // login page can surface "config persistence was skipped" without a
+    // second round-trip (persea#290).
+    let target = if write_result.is_ok() {
+        "/?setup=complete"
+    } else {
+        "/?setup=complete&config=skipped"
+    };
+    Redirect::to(target).into_response()
 }
 
 #[cfg(test)]
