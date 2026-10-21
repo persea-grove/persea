@@ -534,7 +534,7 @@ reconnecting means signing in again (see
 
 | Endpoint | Role | Purpose |
 |----------|------|---------|
-| `GET /api/recordings` | poweruser+ | List recording files |
+| `GET /api/recordings` | poweruser+ | List recording files as `{ recordings, total, limit, offset }` (paginated; `q`, `include_empty`, `limit`, `offset` params; 0-second event artifacts hidden unless `include_empty=true`) |
 | `GET /api/recordings/{name}` | poweruser+ | Serve a recording for playback (filename validated against path traversal) |
 | `DELETE /api/recordings/{name}` | admin | Delete a recording |
 | `GET /api/typescripts` | poweruser+ | List SSH typescripts (name/size/time only: the text content is deliberately not downloadable through the API; see [Configuration](configuration.md#ssh-typescript-recording)) |

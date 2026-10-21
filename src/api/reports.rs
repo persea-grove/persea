@@ -65,12 +65,23 @@ pub struct ReportQuery {
 pub struct RecordingQuery {
     /// Case-insensitive substring filter across entry display name, user, and folder.
     pub q: Option<String>,
+    /// Include zero-second event artifacts (hidden by default).
+    pub include_empty: Option<bool>,
+    /// Page size; clamped to 1..=500 when provided.
+    pub limit: Option<usize>,
+    /// Pagination offset.
+    pub offset: Option<usize>,
 }
 
 /// `GET /api/recordings`: list recording files with metadata from
 /// their sidecar files, newest first. Requires poweruser or admin;
 /// powerusers see only their own recordings (sidecar `user` must match
 /// their display name; recordings without a sidecar are admin-only).
+/// (default 50, clamped 1..=500) and offset. Zero-second event artifacts
+/// are excluded by default; pass `include_empty=true` to see them.
+/// Returns `{ recordings, total, limit, offset }`; `total` is the number
+/// of recordings matching the filters, before pagination.
+///
 /// Returns `AppError::Forbidden` for lower roles.
 pub async fn list_recordings(
     State(manager): State<AppState>,
@@ -96,6 +107,9 @@ pub async fn list_recordings(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_lowercase);
+    let include_empty = query.include_empty.unwrap_or(false);
+    let limit = query.limit.unwrap_or(50).clamp(1, 500);
+    let offset = query.offset.unwrap_or(0);
 
     let recordings = tokio::task::spawn_blocking(move || {
         let mut recordings = Vec::new();
@@ -169,6 +183,12 @@ pub async fn list_recordings(
                     }
                 }
             }
+            // Zero-second event artifacts are hidden by default; a
+            // recording with no sidecar has no duration key and always
+            // stays visible.
+            if !include_empty && rec["duration_secs"].as_i64() == Some(0) {
+                continue;
+            }
             if let Some(ref ql) = q {
                 let haystack = [
                     rec["entry_display_name"].as_str().unwrap_or(""),
@@ -193,12 +213,19 @@ pub async fn list_recordings(
             let mb = b["modified"].as_str().unwrap_or("");
             mb.cmp(ma)
         });
-        recordings
+        let total = recordings.len();
+        let page: Vec<_> = recordings.into_iter().skip(offset).take(limit).collect();
+        (page, total)
     })
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    Ok(Json(json!(recordings)))
+    Ok(Json(json!({
+        "recordings": page,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    })))
 }
 
 /// `GET /api/recordings/typescripts`: list typescript files when
