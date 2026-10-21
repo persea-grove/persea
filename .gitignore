@@ -48,6 +48,12 @@ rpm/staging/
 # Playwright MCP artifacts
 .playwright-mcp/
 
+# Local agent worktrees and tool state
+/.worktrees/
+/graphify-out/
+/.opencode/
+/.opencode-state/
+
 # Claude Code project memory
 .claude/
 
