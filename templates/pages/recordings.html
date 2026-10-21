@@ -52,7 +52,6 @@
                 </div>
             </div>
         </div>
-    </div>
     <!-- Player modal -->
     <div id="player-section" class="hidden fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6" role="dialog" aria-modal="true" aria-labelledby="player-title" aria-hidden="true">
         <div class="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl w-full max-w-7xl max-h-[90vh] flex flex-col">
@@ -156,7 +155,7 @@
         var file = btn.getAttribute('data-file');
         var title = btn.getAttribute('data-title');
         if (btn.classList.contains('rec-play')) playRecording(file, title);
-        else if (btn.classList.contains('rec-delete')) deleteRecording(file, title);
+        else if (btn.classList.contains('rec-delete')) deleteRecording(file, title, btn);
     });
 
     // Human-readable recording name: `YYYY-MM-DD HH:MM — <entry> — <user>`
@@ -449,8 +448,8 @@
         deleteLastFocused = null;
     }
 
-    window.deleteRecording = function(file, title) {
-        openDeleteDialog(file, title);
+    window.deleteRecording = function(file, title, trigger) {
+        openDeleteDialog(file, title, trigger);
     };
 
     document.getElementById('delete-cancel').addEventListener('click', closeDeleteDialog);

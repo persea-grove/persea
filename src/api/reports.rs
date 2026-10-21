@@ -77,7 +77,8 @@ pub struct RecordingQuery {
 /// their sidecar files, newest first. Requires poweruser or admin;
 /// powerusers see only their own recordings (sidecar `user` must match
 /// their display name; recordings without a sidecar are admin-only).
-/// (default 50, clamped 1..=500) and offset. Zero-second event artifacts
+/// Paginated with `limit` (default 50, clamped 1..=500) and `offset`.
+/// Zero-second event artifacts
 /// are excluded by default; pass `include_empty=true` to see them.
 /// Returns `{ recordings, total, limit, offset }`; `total` is the number
 /// of recordings matching the filters, before pagination.
@@ -111,11 +112,11 @@ pub async fn list_recordings(
     let limit = query.limit.unwrap_or(50).clamp(1, 500);
     let offset = query.offset.unwrap_or(0);
 
-    let recordings = tokio::task::spawn_blocking(move || {
+    let (page, total) = tokio::task::spawn_blocking(move || {
         let mut recordings = Vec::new();
         let entries = match std::fs::read_dir(&recording_path) {
             Ok(e) => e,
-            Err(_) => return recordings,
+            Err(_) => return (Vec::new(), 0),
         };
         for entry in entries.flatten() {
             let path = entry.path();
@@ -1403,7 +1404,7 @@ mod tests {
         let resp = router.oneshot(req_get("/api/recordings")).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let items = body_json(resp).await;
-        let names: Vec<&str> = items
+        let names: Vec<&str> = items["recordings"]
             .as_array()
             .unwrap()
             .iter()
@@ -1414,7 +1415,7 @@ mod tests {
         let router = recordings_router(&dir, false, Some(admin()));
         let resp = router.oneshot(req_get("/api/recordings")).await.unwrap();
         let items = body_json(resp).await;
-        let names: Vec<&str> = items
+        let names: Vec<&str> = items["recordings"]
             .as_array()
             .unwrap()
             .iter()

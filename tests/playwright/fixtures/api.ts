@@ -65,7 +65,9 @@ export class PerseaApi {
     const res = await this.request.get(`${BASE_URL}/api/recordings`, {
       headers: this.headers(),
     });
-    return res.json();
+    const body = await res.json();
+    // The endpoint returns {recordings, total, limit, offset}.
+    return Array.isArray(body) ? body : body.recordings;
   }
 
   // ── Me ──
