@@ -76,9 +76,7 @@ use axum::{middleware, Extension, Router};
 use clap::{Parser, Subcommand};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tower_governor::{
-    governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor, GovernorLayer,
-};
+use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 use tower_http::services::ServeDir;
 use tracing_subscriber::EnvFilter;
 
@@ -2279,7 +2277,7 @@ async fn run_server(
         let conf = GovernorConfigBuilder::default()
             .per_second(2)
             .burst_size(10)
-            .key_extractor(SmartIpKeyExtractor)
+            .key_extractor(auth::TrustedIpKeyExtractor)
             .finish()
             .expect("Failed to build session creation rate limit config");
         session_create_route = session_create_route.layer(GovernorLayer::new(conf));
@@ -2291,7 +2289,7 @@ async fn run_server(
     let password_rate_conf = GovernorConfigBuilder::default()
         .per_second(1)
         .burst_size(5)
-        .key_extractor(SmartIpKeyExtractor)
+        .key_extractor(auth::TrustedIpKeyExtractor)
         .finish()
         .expect("Failed to build password change rate limit config");
     let password_route = Router::new()
@@ -2629,7 +2627,7 @@ async fn run_server(
         let conf = GovernorConfigBuilder::default()
             .per_second(20)
             .burst_size(100)
-            .key_extractor(SmartIpKeyExtractor)
+            .key_extractor(auth::TrustedIpKeyExtractor)
             .finish()
             .expect("Failed to build API rate limit config");
         api_routes = api_routes.layer(GovernorLayer::new(conf));
@@ -2652,7 +2650,7 @@ async fn run_server(
     let ws_conf = GovernorConfigBuilder::default()
         .per_second(5)
         .burst_size(50)
-        .key_extractor(SmartIpKeyExtractor)
+        .key_extractor(auth::TrustedIpKeyExtractor)
         .finish()
         .expect("Failed to build WebSocket rate limit config");
     let ws_route = Router::new()
@@ -2717,7 +2715,7 @@ async fn run_server(
     let login_rate_conf = GovernorConfigBuilder::default()
         .per_second(5)
         .burst_size(10)
-        .key_extractor(SmartIpKeyExtractor)
+        .key_extractor(auth::TrustedIpKeyExtractor)
         .finish()
         .expect("Failed to build login rate limit config");
 
@@ -2769,7 +2767,7 @@ async fn run_server(
         let acs_rate_conf = GovernorConfigBuilder::default()
             .per_second(5)
             .burst_size(10)
-            .key_extractor(SmartIpKeyExtractor)
+            .key_extractor(auth::TrustedIpKeyExtractor)
             .finish()
             .expect("Failed to build SAML ACS rate limit config");
         let acs_route = Router::new()
@@ -2925,7 +2923,7 @@ async fn run_server(
         let auth_rate_conf = GovernorConfigBuilder::default()
             .per_second(1)
             .burst_size(5)
-            .key_extractor(SmartIpKeyExtractor)
+            .key_extractor(auth::TrustedIpKeyExtractor)
             .finish()
             .expect("Failed to build auth rate limit config");
 
@@ -3527,7 +3525,7 @@ mod tests {
         let conf = GovernorConfigBuilder::default()
             .per_second(1)
             .burst_size(3)
-            .key_extractor(SmartIpKeyExtractor)
+            .key_extractor(auth::TrustedIpKeyExtractor)
             .finish()
             .expect("governor config");
 
@@ -3537,13 +3535,18 @@ mod tests {
 
         // Fire 10 requests back-to-back from the same source IP. With
         // burst=3 per_second=1, at least one must be throttled (429).
-        // SmartIpKeyExtractor honours X-Forwarded-For when present.
+        // The peer address is what keys the bucket: a direct client has no
+        // trusted proxy in front of it, so its forged X-Forwarded-For header
+        // must not move the bucket.
         let mut saw_ok = false;
         let mut saw_429 = false;
         for _ in 0..10 {
             let req = Request::builder()
                 .uri("/probe")
                 .header("x-forwarded-for", "203.0.113.99")
+                .extension(axum::extract::ConnectInfo(
+                    "198.51.100.7:40000".parse::<SocketAddr>().unwrap(),
+                ))
                 .body(Body::empty())
                 .unwrap();
             let resp = app.clone().oneshot(req).await.unwrap();
@@ -3557,6 +3560,96 @@ mod tests {
         assert!(
             saw_429,
             "no requests were throttled — rate-limit not applied"
+        );
+    }
+
+    /// A direct client must not be able to rotate forged forwarding headers
+    /// to get a fresh rate-limit bucket per request. Only a request whose
+    /// wire-level peer is a configured trusted proxy may move the bucket by
+    /// its forwarded header.
+    #[tokio::test]
+    async fn rate_limit_ignores_forged_forwarded_headers_from_direct_clients() {
+        use axum::{body::Body, http::Request, routing::get, Router};
+        use tower::ServiceExt;
+
+        let conf = GovernorConfigBuilder::default()
+            .per_second(1)
+            .burst_size(3)
+            .key_extractor(auth::TrustedIpKeyExtractor)
+            .finish()
+            .expect("governor config");
+
+        let app: Router = Router::new()
+            .route("/probe", get(|| async { axum::http::StatusCode::OK }))
+            .layer(GovernorLayer::new(conf))
+            .layer(Extension(auth::TrustedProxies(vec![
+                "203.0.113.0/24".to_string()
+            ])));
+
+        // Same peer, a different forged X-Forwarded-For on every request.
+        // If the header were honoured, each request would land in its own
+        // bucket and none would be throttled.
+        let mut saw_429 = false;
+        for i in 0..10 {
+            let req = Request::builder()
+                .uri("/probe")
+                .header("x-forwarded-for", format!("198.51.100.{i}"))
+                .extension(axum::extract::ConnectInfo(
+                    "198.51.100.7:40000".parse::<SocketAddr>().unwrap(),
+                ))
+                .body(Body::empty())
+                .unwrap();
+            let resp = app.clone().oneshot(req).await.unwrap();
+            if resp.status() == axum::http::StatusCode::TOO_MANY_REQUESTS {
+                saw_429 = true;
+            }
+        }
+        assert!(
+            saw_429,
+            "forged X-Forwarded-For from an untrusted peer must not create a fresh bucket"
+        );
+    }
+
+    /// Behind a configured trusted proxy the forwarded header does decide
+    /// the bucket, so a real proxied client is still limited per client IP
+    /// rather than per proxy.
+    #[tokio::test]
+    async fn rate_limit_follows_forwarded_header_from_a_trusted_proxy() {
+        use axum::{body::Body, http::Request, routing::get, Router};
+        use tower::ServiceExt;
+
+        let conf = GovernorConfigBuilder::default()
+            .per_second(1)
+            .burst_size(3)
+            .key_extractor(auth::TrustedIpKeyExtractor)
+            .finish()
+            .expect("governor config");
+
+        let app: Router = Router::new()
+            .route("/probe", get(|| async { axum::http::StatusCode::OK }))
+            .layer(GovernorLayer::new(conf))
+            .layer(Extension(auth::TrustedProxies(vec![
+                "203.0.113.0/24".to_string()
+            ])));
+
+        let mut saw_429 = false;
+        for _ in 0..10 {
+            let req = Request::builder()
+                .uri("/probe")
+                .header("x-forwarded-for", "198.51.100.42")
+                .extension(axum::extract::ConnectInfo(
+                    "203.0.113.9:40000".parse::<SocketAddr>().unwrap(),
+                ))
+                .body(Body::empty())
+                .unwrap();
+            let resp = app.clone().oneshot(req).await.unwrap();
+            if resp.status() == axum::http::StatusCode::TOO_MANY_REQUESTS {
+                saw_429 = true;
+            }
+        }
+        assert!(
+            saw_429,
+            "a trusted proxy's forwarded header must key the bucket"
         );
     }
 
@@ -3584,7 +3677,7 @@ mod tests {
         let acs_rate_conf = GovernorConfigBuilder::default()
             .per_second(5)
             .burst_size(10)
-            .key_extractor(SmartIpKeyExtractor)
+            .key_extractor(auth::TrustedIpKeyExtractor)
             .finish()
             .expect("governor config");
 

@@ -439,6 +439,45 @@ impl Default for WsTicketStore {
 #[derive(Clone)]
 pub struct TrustedProxies(pub Vec<String>);
 
+/// Rate-limit key extractor that trusts forwarded headers only from a
+/// configured reverse proxy.
+///
+/// `tower_governor::SmartIpKeyExtractor` reads `X-Forwarded-For`,
+/// `X-Real-IP` and `Forwarded` unconditionally, so a direct client can
+/// rotate forged headers to dodge its per-IP bucket, or pin a victim's
+/// bucket so the victim gets throttled. This extractor reuses the same
+/// `client_ip` walk the auth middleware uses: forwarded headers count only
+/// when the socket peer is a trusted proxy, and the chain is read
+/// right-to-left so the origin wins over anything a client prepended.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TrustedIpKeyExtractor;
+
+impl tower_governor::key_extractor::KeyExtractor for TrustedIpKeyExtractor {
+    type Key = IpAddr;
+
+    fn extract<T>(
+        &self,
+        req: &axum::http::Request<T>,
+    ) -> Result<Self::Key, tower_governor::errors::GovernorError> {
+        use tower_governor::errors::GovernorError;
+
+        let peer = req
+            .extensions()
+            .get::<axum::extract::ConnectInfo<SocketAddr>>()
+            .map(|ci| ci.0.ip())
+            .or_else(|| req.extensions().get::<SocketAddr>().map(|sa| sa.ip()));
+        let Some(peer) = peer else {
+            return Err(GovernorError::UnableToExtractKey);
+        };
+        let proxies: Vec<String> = req
+            .extensions()
+            .get::<TrustedProxies>()
+            .map(|t| t.0.clone())
+            .unwrap_or_default();
+        Ok(client_ip(req.headers(), peer, &proxies))
+    }
+}
+
 /// Identity of the authenticated caller.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum AuthIdentity {

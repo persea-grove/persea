@@ -137,6 +137,12 @@ like it comes from the proxy's own IP, and a client-supplied
 `X-Forwarded-Proto` header from an untrusted source is ignored, so
 cookies may not get `Secure` even though the browser is on HTTPS.
 
+A client that reaches persea directly cannot move its own rate-limit
+bucket by sending `X-Forwarded-For`: forwarded headers are only read
+when the request's peer address is inside `trusted_proxies`. Without
+that setting, a direct client that rotates forged headers would get a
+fresh bucket per request.
+
 ## `[tls]` section
 
 Controls TLS for the web server and/or for the connection to guacd.
