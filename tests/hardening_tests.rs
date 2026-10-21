@@ -20,7 +20,6 @@
 
 use persea::protocol::{last_instruction_boundary, Instruction, InstructionParser};
 use serde_json::json;
-use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -593,10 +592,10 @@ async fn hostname_target_network_failure_aborts_guacd_connect() {
 
 #[tokio::test]
 async fn guacd_failure_returns_guacd_error_for_hostname_and_ip_targets() {
-    // Dead guacd endpoint: bind then drop the listener so the port is free.
-    let dead_listener = TcpListener::bind("127.0.0.1:0").expect("bind dead guacd port");
-    let dead_addr = dead_listener.local_addr().expect("dead guacd addr");
-    drop(dead_listener);
+    // Dead guacd endpoint. Port 1 is never a guacd: binding a port and
+    // dropping it would let a parallel test's ephemeral bind claim it and
+    // answer for guacd, and the kernel never hands out port 1.
+    let dead_addr = "127.0.0.1:1".to_string();
 
     let env = boot(
         "guacderr",

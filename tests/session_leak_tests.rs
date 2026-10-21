@@ -15,7 +15,6 @@ mod support;
 
 use persea::protocol::{Instruction, InstructionParser};
 use serde_json::json;
-use std::net::TcpListener;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -160,10 +159,10 @@ async fn boot(tag: &str, extra_config: &str, guacd: Guacd) -> TestEnv {
             addr.to_string()
         }
         Guacd::Dead => {
-            let listener = TcpListener::bind("127.0.0.1:0").expect("bind dead guacd port");
-            let addr = listener.local_addr().expect("dead guacd addr");
-            drop(listener);
-            addr.to_string()
+            // Port 1 is never a guacd: binding a port and dropping it would
+            // let a parallel test's ephemeral bind claim it and answer for
+            // guacd, and the kernel never hands out port 1.
+            "127.0.0.1:1".to_string()
         }
     };
 

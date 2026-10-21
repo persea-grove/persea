@@ -200,9 +200,10 @@ async fn fetch_garbage_body_is_a_parse_error() {
 
 #[tokio::test]
 async fn fetch_refused_connection_never_leaks_the_url() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}/releases/latest", listener.local_addr().unwrap());
-    drop(listener); // port is now closed → connection refused
+    // Port 1 never listens: binding a port and dropping it would let a
+    // parallel test's ephemeral bind claim it, and the kernel never hands
+    // out port 1.
+    let url = "http://127.0.0.1:1/releases/latest".to_string();
     let err = check_url(&url).await.unwrap_err();
     let msg = err.to_string();
     assert!(
