@@ -348,6 +348,14 @@ pub async fn setup_submit(
         *resp.status_mut() = axum::http::StatusCode::CONFLICT;
         return resp;
     }
+    // Re-check under the claim: a request that passed the zero-users check
+    // above may have been overtaken by another submission that has since
+    // created the admin. Without this, releasing the claim below would let
+    // the late request create a second first admin.
+    if !needs_setup(&database) {
+        FIRST_ADMIN_CLAIMED.store(false, Ordering::SeqCst);
+        return Redirect::to("/").into_response();
+    }
     if let Err(e) = crate::db::create_user_with_password(
         &database,
         &form.admin_email,
@@ -365,6 +373,10 @@ pub async fn setup_submit(
             &nonce.0,
         );
     }
+    // The store now has a user, so needs_setup() gates every later request.
+    // Release the in-flight claim so a host running back-to-back setup
+    // stores (tests, embedded use) is not permanently locked out.
+    FIRST_ADMIN_CLAIMED.store(false, Ordering::SeqCst);
 
     // Write config file
     let guacd_line = format!("guacd_addr = \"{}\"", toml_escape(&form.guacd_addr));
