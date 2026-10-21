@@ -1115,6 +1115,15 @@ pub struct QuickConnectQuery {
 // identity gate (quick connect redirects unauthenticated callers to
 // login, the connect endpoint 403s), so wire behavior stays put.
 
+/// Stable identity string for email-keyed records (audit `user_email`
+/// columns, session `created_by`): the user's email, or the API key name
+/// for key identities. Display names are non-unique and
+/// user-controllable, so they must never key ownership or audit actor
+/// records (persea#253).
+pub(crate) fn stable_identity(id: &AuthIdentity) -> &str {
+    id.email().unwrap_or(id.display_name())
+}
+
 /// Denial text for [`rbac_connect_allowed`], identical in both connect
 /// paths' responses.
 const RBAC_CONNECT_DENIED: &str = "No permission to connect to this entry. Ask an administrator to grant your group Connect access to it.";
@@ -1140,7 +1149,16 @@ pub(crate) async fn rbac_connect_allowed(
         return true;
     };
     let db_rbac = db_ref.clone();
-    let email = id.display_name().to_string();
+    // Look up by the user's EMAIL (RBAC rows key on the DB user id that
+    // `get_user_by_email` resolves from it). A display name such as
+    // "Alice Example" is not a user key, and feeding it here denied every
+    // Connect grant for users whose identity has a display name set.
+    let Some(email) = id.email() else {
+        // API-key identities have no DB user row; deny (in practice
+        // unreachable here: API keys resolve to admin and return early).
+        return false;
+    };
+    let email = email.to_string();
     let conn_id = format!("{}/{}/{}", scope, folder, entry);
     tokio::task::spawn_blocking(move || {
         // Look up user by email to get numeric ID
@@ -1701,7 +1719,7 @@ pub async fn ab_apply_defaults(
     Json(req): Json<ApplyDefaultsRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let id = require_role(&identity, "admin")?;
-    let admin_email = id.display_name().to_string();
+    let admin_email = stable_identity(id).into();
 
     if !is_db_storage_available(&database) {
         return Err(AppError::Vault(
@@ -2150,7 +2168,7 @@ pub async fn ab_connect_entry(
 
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
     let client_ip_addr = client_ip(&headers, addr.ip(), &proxies);
-    let admin_name = id.display_name().to_string();
+    let admin_name = stable_identity(id).into();
 
     tracing::info!(
         user = %admin_name,
@@ -2211,7 +2229,7 @@ pub async fn ab_create_folder(
     Json(req): Json<CreateFolderRequest>,
 ) -> Result<StatusCode, AppError> {
     let admin_email = match identity.as_ref() {
-        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        Some(Extension(id)) if id.has_role("admin") => stable_identity(id).into(),
         Some(Extension(id))
             if rbac::identity_has_system_permission(
                 &database,
@@ -2219,7 +2237,7 @@ pub async fn ab_create_folder(
                 rbac::SystemPermission::CreateConnectionGroup,
             ) =>
         {
-            id.display_name().to_string()
+            stable_identity(id).into()
         }
         _ => return Err(AppError::Forbidden("admin role required".into())),
     };
@@ -2291,7 +2309,7 @@ pub async fn ab_update_folder(
     Json(req): Json<UpdateFolderRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let id = require_role(&identity, "admin")?;
-    let admin_email = id.display_name().to_string();
+    let admin_email = stable_identity(id).into();
 
     if !is_db_storage_available(&database) {
         return Err(AppError::Vault(
@@ -2384,7 +2402,7 @@ pub async fn ab_delete_folder(
     Path((scope, folder)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let admin_email = match identity.as_ref() {
-        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        Some(Extension(id)) if id.has_role("admin") => stable_identity(id).into(),
         Some(Extension(id))
             if rbac::identity_has_object_permission(
                 &database,
@@ -2394,7 +2412,7 @@ pub async fn ab_delete_folder(
                 rbac::ObjectPermission::Delete,
             ) =>
         {
-            id.display_name().to_string()
+            stable_identity(id).into()
         }
         _ => return Err(AppError::Forbidden("admin role required".into())),
     };
@@ -2491,7 +2509,7 @@ pub async fn ab_create_entry(
     Json(req): Json<CreateEntryRequest>,
 ) -> Result<StatusCode, AppError> {
     let admin_email = match identity.as_ref() {
-        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        Some(Extension(id)) if id.has_role("admin") => stable_identity(id).into(),
         Some(Extension(id))
             if rbac::identity_has_system_permission(
                 &database,
@@ -2499,7 +2517,7 @@ pub async fn ab_create_entry(
                 rbac::SystemPermission::CreateConnection,
             ) =>
         {
-            id.display_name().to_string()
+            stable_identity(id).into()
         }
         _ => return Err(AppError::Forbidden("admin role required".into())),
     };
@@ -2695,7 +2713,7 @@ pub async fn ab_update_entry(
     Json(data): Json<UpdateEntryRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let admin_email = match identity.as_ref() {
-        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        Some(Extension(id)) if id.has_role("admin") => stable_identity(id).into(),
         Some(Extension(id))
             if rbac::identity_has_object_permission(
                 &database,
@@ -2705,7 +2723,7 @@ pub async fn ab_update_entry(
                 rbac::ObjectPermission::Update,
             ) =>
         {
-            id.display_name().to_string()
+            stable_identity(id).into()
         }
         _ => return Err(AppError::Forbidden("admin role required".into())),
     };
@@ -2995,7 +3013,7 @@ pub async fn ab_delete_entry(
     Path((scope, folder, entry)): Path<(String, String, String)>,
 ) -> Result<StatusCode, AppError> {
     let admin_email = match identity.as_ref() {
-        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        Some(Extension(id)) if id.has_role("admin") => stable_identity(id).into(),
         Some(Extension(id))
             if rbac::identity_has_object_permission(
                 &database,
@@ -3005,7 +3023,7 @@ pub async fn ab_delete_entry(
                 rbac::ObjectPermission::Delete,
             ) =>
         {
-            id.display_name().to_string()
+            stable_identity(id).into()
         }
         _ => return Err(AppError::Forbidden("admin role required".into())),
     };
@@ -3266,7 +3284,7 @@ pub async fn quick_connect(
 
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
     let client_ip = client_ip(&headers, addr.ip(), &proxies);
-    let admin_name = id.display_name().to_string();
+    let admin_name = stable_identity(id).into();
 
     if let (Some(scope), Some(folder), Some(entry)) = (
         query.scope.as_ref(),
@@ -5286,6 +5304,76 @@ mod tests {
             allowed.status(),
             StatusCode::OK,
             "with the Connect grant the credential prompt is served"
+        );
+    }
+
+    #[tokio::test]
+    async fn quick_connect_grant_resolves_user_by_email_despite_display_name() {
+        // persea#253: the lookup used to feed display_name() into
+        // get_user_by_email, denying every grant for users whose identity
+        // has a display name set (LDAP/SSO maps `cn` into the name).
+        let db = test_db();
+        db::create_ab_folder(&db, "shared", "Clients", "", "", false).unwrap();
+        let folder = db::get_ab_folder(&db, "shared", "Clients").unwrap();
+        db::create_ab_entry(
+            &db,
+            folder.id,
+            "web1",
+            "Web 1",
+            "ssh",
+            "10.0.0.1",
+            Some(22),
+            "root",
+            "{}",
+            "",
+        )
+        .unwrap();
+
+        // Start with the default name (email itself), denied without a grant.
+        let session = insert_user_with_groups(&db, "bob@test.com", "operator", &[]);
+        let user = db::get_user_by_email(&db, "bob@test.com").unwrap();
+        assert_eq!(user.name, "bob@test.com", "display name defaults to email");
+
+        let app = build_quick_connect_router(db.clone(), test_vault_state());
+        let denied = app
+            .clone()
+            .oneshot(session_req(
+                "GET",
+                "/api/connect?scope=shared&folder=Clients&entry=web1",
+                &session,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            denied.status(),
+            StatusCode::FORBIDDEN,
+            "no grant, display name set: still denied"
+        );
+
+        // Set a display name that is not the email, then grant: the
+        // Connect check must resolve through the EMAIL lookup.
+        let user =
+            db::upsert_user(&db, "bob@test.com", "Bobby Tables", None, "operator", &[]).unwrap();
+        rbac::grant_connection_permission(
+            &db,
+            &format!("u:{}", user.id),
+            "shared/Clients/web1",
+            rbac::ObjectPermission::Connect,
+        )
+        .unwrap();
+
+        let allowed = app
+            .oneshot(session_req(
+                "GET",
+                "/api/connect?scope=shared&folder=Clients&entry=web1",
+                &session,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            allowed.status(),
+            StatusCode::OK,
+            "with a display name set that is not the email, the Connect grant must still resolve"
         );
     }
 
