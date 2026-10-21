@@ -50,6 +50,12 @@ override_dh_auto_install:
 	# ldconfig drop-in so guacd can find its libs
 	echo "/opt/persea/lib" > debian/persea/etc/ld.so.conf.d/persea.conf
 
+	# Licence and attribution. Apache-2.0 section 4(d) requires the NOTICE
+	# file to ship with the distribution when the upstream work had one.
+	install -d debian/persea/usr/share/doc/persea
+	install -m 644 LICENSE debian/persea/usr/share/doc/persea/copyright
+	install -m 644 NOTICE debian/persea/usr/share/doc/persea/NOTICE
+
 override_dh_shlibdeps:
 	dh_shlibdeps -l/opt/persea/lib
 

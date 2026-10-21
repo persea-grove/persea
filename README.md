@@ -251,4 +251,6 @@ persea is a hobby project, funded by its community. If persea saves you time, co
 
 persea is free software under the [Apache License 2.0](LICENSE). Use it, modify it, sell it: it is a hobby project, everything is included, nothing is gated.
 
+persea is a derivative work of [RustGuac](https://github.com/sol1/rustguac) by Sol1 Pty Ltd, which is licensed under the same terms. The upstream copyright notice is retained in the [LICENSE](LICENSE) file and the attribution is in [NOTICE](NOTICE), as Apache-2.0 section 4(c) and 4(d) require.
+
 By contributing to persea, you agree to the [Contributor License Agreement (CLA.md)](CLA.md).
