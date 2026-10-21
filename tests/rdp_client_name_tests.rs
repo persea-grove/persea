@@ -12,7 +12,6 @@
 
 use persea::protocol::{Instruction, InstructionParser};
 use serde_json::json;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -102,14 +101,14 @@ struct TestEnv {
     csrf: String,
     client: reqwest::Client,
     guacd_results: Arc<Mutex<Vec<MockConn>>>,
-    _tmp: PathBuf,
     _app: support::AppProc,
+    _tmp: tempfile::TempDir,
 }
 
 async fn boot(tag: &str, extra_config: &str, args_names: &[&str]) -> TestEnv {
     let marker = format!("s26-{tag}-{}", std::process::id());
-    let tmp = std::env::temp_dir().join(&marker);
-    std::fs::create_dir_all(&tmp).expect("create scratch dir");
+    let tmp_guard = tempfile::tempdir().expect("create scratch dir");
+    let tmp = tmp_guard.path();
     let config_path = tmp.join("config.toml");
     let log_path = tmp.join("persea.log");
 
@@ -166,8 +165,8 @@ async fn boot(tag: &str, extra_config: &str, args_names: &[&str]) -> TestEnv {
         csrf,
         client: booted.client,
         guacd_results: results,
-        _tmp: tmp,
         _app: booted.app,
+        _tmp: tmp_guard,
     }
 }
 

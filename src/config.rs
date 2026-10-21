@@ -3049,20 +3049,20 @@ mod tests {
         // Backward-compat: a static_path with no themes/ subdir loads
         // exactly the Rust-baked built-ins (8 of them, in their defined
         // order). Existing deployments upgrading to 1.7.1 see no change.
-        let tmp = std::env::temp_dir().join(format!("persea-test-{}", std::process::id()));
-        std::fs::create_dir_all(&tmp).unwrap();
+        let tmp_dir = tempfile::tempdir().expect("temp dir");
+        let tmp = tmp_dir.path();
         let themes = load_themes(&tmp);
         assert_eq!(themes.len(), builtin_presets().len());
         let names: Vec<&str> = themes.iter().map(|(n, _)| n.as_str()).collect();
         let builtin_names: Vec<&str> = builtin_presets().iter().map(|(n, _)| *n).collect();
         assert_eq!(names, builtin_names);
-        std::fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]
     fn load_themes_adds_new_disk_theme() {
         // A new .toml in the themes dir is appended after the built-ins.
-        let tmp = std::env::temp_dir().join(format!("persea-test-{}-add", std::process::id()));
+        let tmp_dir = tempfile::tempdir().expect("temp dir");
+        let tmp = tmp_dir.path();
         let themes_dir = tmp.join("themes");
         std::fs::create_dir_all(&themes_dir).unwrap();
         std::fs::write(themes_dir.join("custom-brand.toml"), theme_toml("#ff00ff")).unwrap();
@@ -3071,14 +3071,14 @@ mod tests {
         assert_eq!(custom.1.primary, "#ff00ff");
         // All built-ins still present and unchanged.
         assert_eq!(themes.len(), builtin_presets().len() + 1);
-        std::fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]
     fn load_themes_disk_overrides_builtin_with_same_name() {
         // A .toml named after a built-in (e.g. aurora.toml) replaces the
         // built-in. Operators re-brand by editing the file, not the Rust code.
-        let tmp = std::env::temp_dir().join(format!("persea-test-{}-ovr", std::process::id()));
+        let tmp_dir = tempfile::tempdir().expect("temp dir");
+        let tmp = tmp_dir.path();
         let themes_dir = tmp.join("themes");
         std::fs::create_dir_all(&themes_dir).unwrap();
         std::fs::write(themes_dir.join("aurora.toml"), theme_toml("#abcdef")).unwrap();
@@ -3087,7 +3087,6 @@ mod tests {
         assert_eq!(aurora.1.primary, "#abcdef");
         // Count is unchanged (override, not addition).
         assert_eq!(themes.len(), builtin_presets().len());
-        std::fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]
@@ -3096,7 +3095,8 @@ mod tests {
         // is skipped with a log warning, not loaded. Protects the frontend
         // picker, log lines, and config-file matching from injection or
         // homoglyph confusion via crafted filenames.
-        let tmp = std::env::temp_dir().join(format!("persea-test-{}-bad", std::process::id()));
+        let tmp_dir = tempfile::tempdir().expect("temp dir");
+        let tmp = tmp_dir.path();
         let themes_dir = tmp.join("themes");
         std::fs::create_dir_all(&themes_dir).unwrap();
         // Whitespace, HTML, traversal-ish, and overlong all rejected.
@@ -3118,14 +3118,14 @@ mod tests {
                 "invalid name should be rejected: {bad_name}"
             );
         }
-        std::fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]
     fn load_themes_skips_malformed_toml() {
         // A garbage .toml in the themes dir is skipped with a warning, not
         // fatal. The rest of the directory continues to load.
-        let tmp = std::env::temp_dir().join(format!("persea-test-{}-bad-toml", std::process::id()));
+        let tmp_dir = tempfile::tempdir().expect("temp dir");
+        let tmp = tmp_dir.path();
         let themes_dir = tmp.join("themes");
         std::fs::create_dir_all(&themes_dir).unwrap();
         std::fs::write(themes_dir.join("bad.toml"), "this is = not\nvalid toml [[[").unwrap();
@@ -3133,7 +3133,6 @@ mod tests {
         let themes = load_themes(&tmp);
         assert!(themes.iter().any(|(n, _)| n == "good"));
         assert!(!themes.iter().any(|(n, _)| n == "bad"));
-        std::fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]

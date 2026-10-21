@@ -113,8 +113,8 @@ async fn run_backend_test(label: &str, url_env: &str, expected_backend: &str) {
     let site_title = format!("site-{marker}");
     let admin_name = format!("admin-{marker}");
 
-    let tmp = std::env::temp_dir().join(&marker);
-    std::fs::create_dir_all(&tmp).expect("create scratch dir");
+    let tmp_guard = tempfile::tempdir().expect("create scratch dir");
+    let tmp = tmp_guard.path();
     let config_path = tmp.join("config.toml");
     let log_path = tmp.join("persea.log");
     let db_path = tmp.join("admin.db").display().to_string();
@@ -209,7 +209,6 @@ async fn run_backend_test(label: &str, url_env: &str, expected_backend: &str) {
     .await;
 
     terminate(&mut app2);
-    std::fs::remove_dir_all(&tmp).ok();
     eprintln!("backend test: PASSED against {label}");
 }
 

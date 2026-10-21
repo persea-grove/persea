@@ -42,7 +42,10 @@ fn trusted() -> Extension<TrustedProxies> {
 }
 
 fn new_manager(db: Option<Db>) -> AppState {
-    let tmp = std::env::temp_dir().join(format!("persea-session-ux-test-{}", Uuid::new_v4()));
+    let tmp = tempfile::tempdir()
+        .expect("temp dir")
+        .path()
+        .join("recordings");
     let mut config = Config::default();
     config.recording_path = Some(tmp.join("recordings"));
     // Port 1 is never a guacd: keep the create-path tests deterministic on
@@ -110,7 +113,10 @@ async fn create_without_reason_is_rejected_400_when_required() {
     config.session = Some(SessionConfig {
         reason_required: true,
     });
-    let tmp = std::env::temp_dir().join(format!("persea-session-ux-{}", Uuid::new_v4()));
+    let tmp = tempfile::tempdir()
+        .expect("temp dir")
+        .path()
+        .join("recordings");
     config.recording_path = Some(tmp.join("recordings"));
     let manager: AppState = Arc::new(SessionManager::new(config, None));
 
@@ -137,7 +143,10 @@ async fn create_with_reason_passes_the_reason_gate_when_required() {
     config.session = Some(SessionConfig {
         reason_required: true,
     });
-    let tmp = std::env::temp_dir().join(format!("persea-session-ux-{}", Uuid::new_v4()));
+    let tmp = tempfile::tempdir()
+        .expect("temp dir")
+        .path()
+        .join("recordings");
     config.recording_path = Some(tmp.join("recordings"));
     config.guacd_addr = "127.0.0.1:1".into();
     let manager: AppState = Arc::new(SessionManager::new(config, None));
@@ -211,7 +220,10 @@ async fn blank_reason_counts_as_missing_when_required() {
     config.session = Some(SessionConfig {
         reason_required: true,
     });
-    let tmp = std::env::temp_dir().join(format!("persea-session-ux-{}", Uuid::new_v4()));
+    let tmp = tempfile::tempdir()
+        .expect("temp dir")
+        .path()
+        .join("recordings");
     config.recording_path = Some(tmp.join("recordings"));
     let manager: AppState = Arc::new(SessionManager::new(config, None));
 

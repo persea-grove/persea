@@ -161,6 +161,9 @@ proptest = "1"
 # used only by the teardown integration tests' WebSocket client. No new
 # crates enter the lock.
 tokio-tungstenite = "0.30"
+# Already in the dependency tree via proptest — used by tests to get temp
+# fixture dirs that are removed on drop instead of leaking under /tmp.
+tempfile = "3"
 
 [build-dependencies]
 pulldown-cmark = "0.13"

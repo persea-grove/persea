@@ -124,8 +124,8 @@ struct TestEnv {
     key: String,
     csrf: String,
     client: reqwest::Client,
-    _tmp: PathBuf,
     _app: support::AppProc,
+    _tmp: tempfile::TempDir,
 }
 
 /// Boot persea with the given extra config (verbatim TOML appended after
@@ -133,8 +133,8 @@ struct TestEnv {
 /// come before any section header the caller includes.
 async fn boot(tag: &str, extra_config: &str, guacd: Guacd) -> TestEnv {
     let marker = format!("s340-{tag}-{}", std::process::id());
-    let tmp = std::env::temp_dir().join(&marker);
-    std::fs::create_dir_all(&tmp).expect("create scratch dir");
+    let tmp_guard = tempfile::tempdir().expect("create scratch dir");
+    let tmp = tmp_guard.path();
     let config_path = tmp.join("config.toml");
     let log_path = tmp.join("persea.log");
 
@@ -187,8 +187,8 @@ async fn boot(tag: &str, extra_config: &str, guacd: Guacd) -> TestEnv {
         key: booted.key,
         csrf,
         client: booted.client,
-        _tmp: tmp,
         _app: booted.app,
+        _tmp: tmp_guard,
     }
 }
 
@@ -315,9 +315,8 @@ async fn web_session_guacd_failure_kills_browser_and_frees_display() {
     // Scripts live in their own marker dir so /proc scanning only matches
     // these processes (the persea server cmdline carries config.toml from
     // a different directory).
-    let scripts_dir =
-        std::env::temp_dir().join(format!("persea340-browser-{}", std::process::id()));
-    std::fs::create_dir_all(&scripts_dir).expect("create scripts dir");
+    let scripts_guard = tempfile::tempdir().expect("create scripts dir");
+    let scripts_dir = scripts_guard.path().to_path_buf();
     let start_log = scripts_dir.join("starts.log");
 
     // Fake Xvnc: logs each start (proof the display slot was reused),
@@ -433,8 +432,8 @@ async fn web_session_guacd_failure_kills_browser_and_frees_display() {
 
 #[tokio::test]
 async fn rdp_drive_dir_removed_when_create_fails() {
-    let tmp = std::env::temp_dir().join(format!("s340-drive-{}", std::process::id()));
-    let drive_path = tmp.join("drives");
+    let tmp_guard = tempfile::tempdir().expect("create scratch dir");
+    let drive_path = tmp_guard.path().join("drives");
     std::fs::create_dir_all(&drive_path).expect("create drive base dir");
 
     let extra = format!(

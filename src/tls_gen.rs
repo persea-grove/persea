@@ -90,38 +90,11 @@ pub fn ensure_self_signed_pair(
 mod tests {
     use super::*;
 
-    /// Scratch directory under the OS temp dir, removed on drop. Hand-rolled
-    /// (no tempfile dev-dependency): unique enough via pid plus wall clock.
-    struct TempDir(std::path::PathBuf);
-
-    impl TempDir {
-        fn new(tag: &str) -> Self {
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
-            let dir = std::env::temp_dir().join(format!(
-                "persea-tls-gen-{}-{}-{}",
-                tag,
-                std::process::id(),
-                nanos
-            ));
-            std::fs::create_dir_all(&dir).expect("failed to create scratch dir");
-            Self(dir)
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
     #[test]
     fn generates_when_missing() {
-        let tmp = TempDir::new("generate");
-        let cert = tmp.0.join("cert.pem");
-        let key = tmp.0.join("key.pem");
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let cert = tmp.path().join("cert.pem");
+        let key = tmp.path().join("key.pem");
 
         let generated =
             ensure_self_signed_pair(&cert, &key, "persea.test", &[]).expect("generation succeeds");
@@ -144,9 +117,9 @@ mod tests {
 
     #[test]
     fn present_files_are_untouched() {
-        let tmp = TempDir::new("present");
-        let cert = tmp.0.join("cert.pem");
-        let key = tmp.0.join("key.pem");
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let cert = tmp.path().join("cert.pem");
+        let key = tmp.path().join("key.pem");
         std::fs::write(&cert, "pre-existing cert\n").expect("seed cert");
         std::fs::write(&key, "pre-existing key\n").expect("seed key");
 

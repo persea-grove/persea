@@ -23,8 +23,8 @@ use persea::db_pool::DbPool;
 
 #[tokio::test]
 async fn ha_epoch_mismatch_reloads_flags_within_one_read() {
-    let dir = std::env::temp_dir().join(format!("persea-289-ha-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = tempfile::tempdir().expect("temp dir");
+    let dir = dir.path();
 
     // Shared backend: real pool + embedded migrations (seeds the epoch row).
     let sqlite_path = dir.join("shared.db");

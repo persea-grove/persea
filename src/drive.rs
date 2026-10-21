@@ -475,8 +475,8 @@ mod tests {
 
     #[test]
     fn create_session_dir_creates_download_folder_when_downloads_allowed() {
-        let tmp =
-            std::env::temp_dir().join(format!("persea-drive-download-test-{}", Uuid::new_v4()));
+        let tmp_dir = tempfile::tempdir().expect("temp dir");
+        let tmp = tmp_dir.path().to_path_buf();
         let config = DriveConfig {
             enabled: true,
             drive_path: tmp.clone(),
@@ -485,13 +485,12 @@ mod tests {
         };
         let dir = create_session_dir(&config, Uuid::new_v4()).unwrap();
         assert!(dir.join("Download").is_dir());
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn create_session_dir_skips_download_folder_when_downloads_disabled() {
-        let tmp =
-            std::env::temp_dir().join(format!("persea-drive-nodownload-test-{}", Uuid::new_v4()));
+        let tmp_dir = tempfile::tempdir().expect("temp dir");
+        let tmp = tmp_dir.path().to_path_buf();
         let config = DriveConfig {
             enabled: true,
             drive_path: tmp.clone(),
@@ -500,12 +499,12 @@ mod tests {
         };
         let dir = create_session_dir(&config, Uuid::new_v4()).unwrap();
         assert!(!dir.join("Download").exists());
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn create_session_dir_idempotent() {
-        let tmp = std::env::temp_dir().join(format!("persea-drive-idem-test-{}", Uuid::new_v4()));
+        let tmp_dir = tempfile::tempdir().expect("temp dir");
+        let tmp = tmp_dir.path().to_path_buf();
         let config = DriveConfig {
             enabled: true,
             drive_path: tmp.clone(),
@@ -517,7 +516,6 @@ mod tests {
         let second = create_session_dir(&config, id).unwrap();
         assert_eq!(first, second);
         assert!(first.join("Download").is_dir());
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

@@ -522,15 +522,14 @@ mod tests {
 
     #[test]
     fn test_safe_recording_name_valid() {
-        let dir = std::env::temp_dir().join("persea-test-recordings");
-        let _ = std::fs::create_dir_all(&dir);
+        let tmp_guard = tempfile::tempdir().expect("temp dir");
+        let dir = tmp_guard.path().to_path_buf();
         let f1 = dir.join("session-abc123.guac");
         let f2 = dir.join("2024-01-01_recording.guac");
         std::fs::write(&f1, b"").unwrap();
         std::fs::write(&f2, b"").unwrap();
         assert!(is_safe_recording_name("session-abc123.guac", &dir));
         assert!(is_safe_recording_name("2024-01-01_recording.guac", &dir));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

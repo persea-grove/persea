@@ -16,7 +16,6 @@ use axum::http::Request;
 use futures_util::{SinkExt, StreamExt};
 use persea::protocol::{Instruction, InstructionParser};
 use serde_json::json;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -229,8 +228,8 @@ struct TestEnv {
     csrf: String,
     client: reqwest::Client,
     guacd_results: Arc<Mutex<Vec<MockConn>>>,
-    _tmp: PathBuf,
     _app: support::AppProc,
+    _tmp: tempfile::TempDir,
 }
 
 async fn boot(tag: &str) -> TestEnv {
@@ -242,8 +241,8 @@ async fn boot(tag: &str) -> TestEnv {
     tokio::spawn(mock_guacd(guacd_listener, guacd_results.clone()));
 
     let marker = format!("t11-{tag}-{}", std::process::id());
-    let tmp = std::env::temp_dir().join(&marker);
-    std::fs::create_dir_all(&tmp).expect("create scratch dir");
+    let tmp_guard = tempfile::tempdir().expect("create scratch dir");
+    let tmp = tmp_guard.path();
     let config_path = tmp.join("config.toml");
     let log_path = tmp.join("persea.log");
     let db_path = tmp.join("admin.db").display().to_string();
@@ -271,8 +270,8 @@ async fn boot(tag: &str) -> TestEnv {
         csrf,
         client: booted.client,
         guacd_results,
-        _tmp: tmp,
         _app: booted.app,
+        _tmp: tmp_guard,
     }
 }
 

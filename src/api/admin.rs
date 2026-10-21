@@ -1070,8 +1070,8 @@ mod tests {
 
     #[tokio::test]
     async fn tls_cert_info_parses_fixture_cert() {
-        let dir = std::env::temp_dir().join(format!("persea-tls-fixture-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let tmp_dir = tempfile::tempdir().expect("temp dir");
+        let dir = tmp_dir.path().to_path_buf();
         let cert_path = write_fixture_cert(&dir);
         let db = test_db();
         seed_tls_settings(&db, &cert_path.to_string_lossy(), "/nonexistent/key.pem");
@@ -1138,8 +1138,8 @@ mod tests {
 
     #[tokio::test]
     async fn tls_cert_info_unparseable_pem_reports_error_in_band() {
-        let dir = std::env::temp_dir().join(format!("persea-cert-bad-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let tmp_dir = tempfile::tempdir().expect("temp dir");
+        let dir = tmp_dir.path().to_path_buf();
         let bad = dir.join("bad.pem");
         std::fs::write(&bad, "not a pem").unwrap();
         let db = test_db();

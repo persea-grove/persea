@@ -494,13 +494,13 @@ mod tests {
 
     /// Write a throwaway config file for the section-extraction tests and
     /// return its path (the wizard reads sections back from disk).
-    fn write_config(name: &str, contents: &str) -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "persea-setup-test-{name}-{}.toml",
-            std::process::id()
-        ));
+    fn write_config(name: &str, contents: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        // The caller must hold the TempDir so the file survives; it is
+        // removed with the dir on drop, even on panic.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join(format!("{name}.toml"));
         std::fs::write(&path, contents).unwrap();
-        path
+        (dir, path)
     }
 
     #[test]
@@ -535,7 +535,7 @@ secure_cookies = false
 
     #[test]
     fn tls_section_for_preserves_existing_tls_section() {
-        let path = write_config(
+        let (_config_dir, path) = write_config(
             "tls-present",
             r#"[tls]
 cert_path = "/etc/persea/cert.pem"
@@ -555,20 +555,18 @@ key_path = "/etc/persea/key.pem"
 secure_cookies = false
 "#
         );
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn tls_section_for_empty_without_tls_section() {
         // HTTP-only install: the wizard must emit nothing for [tls].
-        let path = write_config("tls-absent", "listen_addr = \"127.0.0.1:8089\"\n");
+        let (_config_dir, path) = write_config("tls-absent", "listen_addr = \"127.0.0.1:8089\"\n");
         assert_eq!(tls_section_for(path.to_str().unwrap()), "");
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn storage_section_for_preserves_existing_key() {
-        let path = write_config(
+        let (_config_dir, path) = write_config(
             "storage-key",
             r#"[tls]
 cert_path = "/etc/persea/cert.pem"
@@ -583,12 +581,11 @@ encryption_key = "aabbccdd"
 encryption_key = "aabbccdd"
 "#
         );
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn storage_section_for_adds_key_when_section_lacks_one() {
-        let path = write_config(
+        let (_config_dir, path) = write_config(
             "storage-no-key",
             r#"[storage]
 backend = "db"
@@ -604,12 +601,12 @@ backend = "db"
             .trim_end_matches('"');
         assert_eq!(key.len(), 64);
         assert!(key.chars().all(|c| c.is_ascii_hexdigit()));
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn storage_section_for_generates_fresh_section_when_absent() {
-        let path = write_config("storage-absent", "listen_addr = \"127.0.0.1:8089\"\n");
+        let (_config_dir, path) =
+            write_config("storage-absent", "listen_addr = \"127.0.0.1:8089\"\n");
         let section = storage_section_for(path.to_str().unwrap());
         assert!(section.starts_with("[storage]\nencryption_key = \""));
         let key = section
@@ -620,6 +617,5 @@ backend = "db"
             .trim_end_matches('"');
         assert_eq!(key.len(), 64);
         assert!(key.chars().all(|c| c.is_ascii_hexdigit()));
-        let _ = std::fs::remove_file(&path);
     }
 }

@@ -37,10 +37,7 @@ fn test_db() -> Db {
 /// regression test for persea#290 builds its own path explicitly and
 /// asserts on it.
 fn point_config_writes_to_temp() {
-    std::env::set_var(
-        "RUSTGUAC_CONFIG",
-        std::env::temp_dir().join("persea-setup-test-config.toml"),
-    );
+    std::env::set_var("RUSTGUAC_CONFIG", wizard_temp_file());
 }
 
 /// Router with the real setup handlers, the same extensions the setup
@@ -49,11 +46,20 @@ fn point_config_writes_to_temp() {
 /// explicit path via `test_router_with_path` to assert the wizard wrote
 /// there (persea#290).
 fn test_router(db: Db, config: Config) -> Router {
-    test_router_with_path(db, config, wizard_default_path())
+    test_router_with_path(db, config, wizard_temp_file())
 }
 
-fn wizard_default_path() -> PathBuf {
-    std::env::temp_dir().join("persea-setup-test-config.toml")
+/// Unique wizard scratch file inside a temp dir that exists for the whole
+/// test-binary run and is removed at process exit (the OnceLock holds the
+/// TempDir; Rust drops statics at exit). Using the system temp root
+/// directly leaked both the dir and the file.
+fn wizard_temp_file() -> PathBuf {
+    use std::sync::OnceLock;
+    static WIZARD_DIR: OnceLock<tempfile::TempDir> = OnceLock::new();
+    WIZARD_DIR
+        .get_or_init(|| tempfile::tempdir().expect("wizard scratch dir"))
+        .path()
+        .join("persea-setup-test-config.toml")
 }
 
 fn test_router_with_path(db: Db, config: Config, wizard_path: PathBuf) -> Router {
@@ -206,14 +212,13 @@ async fn password_field_advertises_policy_minimum() {
 /// Unique scratch file for one regression test invocation. Parallel tests
 /// in this binary each pick their own path so the wizard's `fs::write`
 /// never collides between runs (persea#290).
-fn wizard_scratch_config(tag: &str) -> PathBuf {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!(
-        "persea-setup-flow-{tag}-{}-{n}.toml",
-        std::process::id()
-    ))
+/// Unique scratch CLEAN DIR per call; the caller holds the TempDir so the
+/// wizard's written file survives for the test and vanishes on drop.
+fn wizard_scratch_dir(tag: &str) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().expect("wizard scratch dir");
+    let path = dir.path().join("config.toml");
+    let _ = tag;
+    (dir, path)
 }
 
 /// Regression for persea#290: a fresh-DB wizard run with the wizard path
@@ -226,10 +231,9 @@ fn wizard_scratch_config(tag: &str) -> PathBuf {
 /// while still completing setup.
 #[tokio::test]
 async fn wizard_writes_to_injected_config_path_not_default() {
-    let target = wizard_scratch_config("wizard-writes");
+    let (_scratch, target) = wizard_scratch_dir("wizard-writes");
     // Make sure we start from "file absent" so the post-write assertion
     // is unambiguous.
-    let _ = std::fs::remove_file(&target);
     let db = test_db();
     let router = test_router_with_path(db, Config::default(), target.clone());
 
@@ -311,12 +315,12 @@ async fn wizard_completes_when_config_write_fails() {
     // A path whose parent directory does not exist: fs::write returns
     // NotFound. The wizard must NOT 500 — setup is best-effort on the
     // config side.
-    let target = wizard_scratch_config("wizard-fail")
+    let target = wizard_scratch_dir("wizard-fail")
+        .1
         .parent()
         .unwrap()
         .join("missing-dir")
         .join("config.toml");
-    let _ = std::fs::remove_file(&target);
     let db = test_db();
     let router = test_router_with_path(db.clone(), Config::default(), target.clone());
 

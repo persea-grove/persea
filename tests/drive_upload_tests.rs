@@ -34,8 +34,15 @@ async fn status_handler() -> Json<serde_json::Value> {
 
 fn test_router() -> Router {
     let mut config = persea::config::Config::default();
-    config.recording_path =
-        Some(std::env::temp_dir().join(format!("persea-drive-upload-test-{}", Uuid::new_v4())));
+    // Recordings are never written here; a dropped unique temp dir path
+    // keeps the config pointing somewhere private without the per-test
+    // directory write that used to leak.
+    config.recording_path = Some(
+        tempfile::tempdir()
+            .expect("temp dir")
+            .path()
+            .join("recordings"),
+    );
     let manager: Arc<SessionManager> = Arc::new(SessionManager::new(config, None));
     Router::new()
         .route("/api/auth/status", get(status_handler))

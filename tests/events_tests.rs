@@ -28,7 +28,10 @@ fn new_manager() -> AppState {
 }
 
 fn new_manager_with_idle(idle_timeout_secs: u64) -> AppState {
-    let tmp = std::env::temp_dir().join(format!("persea-events-test-{}", Uuid::new_v4()));
+    let tmp = tempfile::tempdir()
+        .expect("temp dir")
+        .path()
+        .join("recordings");
     let mut config = persea::config::Config::default();
     config.recording_path = Some(tmp.join("recordings"));
     config.session_idle_timeout_secs = idle_timeout_secs;

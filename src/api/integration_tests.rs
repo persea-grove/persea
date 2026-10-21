@@ -1209,12 +1209,13 @@ fn build_quick_connect_router(
     db: Db,
     vault: VaultState,
     storage_key: Option<String>,
+    recording_root: &std::path::Path,
     backend: &str,
 ) -> axum::Router {
     use axum::routing::get;
     let mut config = crate::config::Config::default();
     // Keep the manager's recording dir out of the repo working dir.
-    config.recording_path = Some(std::path::PathBuf::from(std::env::temp_dir()));
+    config.recording_path = Some(recording_root.to_path_buf());
     let manager: super::AppState = Arc::new(crate::session::SessionManager::new(config, None));
     axum::Router::new()
         .route("/api/connect", get(super::quick_connect))
@@ -1251,7 +1252,8 @@ async fn test_quick_connect_prompts_when_no_credentials() {
     let db = test_db();
     let key = insert_test_admin(&db, "admin");
     seed_ssh_entry(&db, "QC", "nocred");
-    let app = build_quick_connect_router(db, test_vault_state(), None, "db");
+    let recordings_dir = tempfile::tempdir().expect("temp dir");
+    let app = build_quick_connect_router(db, test_vault_state(), None, recordings_dir.path(), "db");
     let response = app
         .oneshot(make_auth_request(
             "GET",
@@ -1297,7 +1299,14 @@ async fn test_quick_connect_reads_credentials_from_db() {
         "shared/QC/dbcred",
         r#"{"type":"ssh","hostname":"127.0.0.1"}"#,
     ));
-    let app = build_quick_connect_router(db, mock_vault_state(mock), Some(enc_key), "db");
+    let recordings_dir = tempfile::tempdir().expect("temp dir");
+    let app = build_quick_connect_router(
+        db,
+        mock_vault_state(mock),
+        Some(enc_key),
+        recordings_dir.path(),
+        "db",
+    );
     let response = app
         .oneshot(make_auth_request(
             "GET",
@@ -1337,7 +1346,14 @@ async fn test_quick_connect_reads_credentials_from_vault() {
         "shared/QC/vaultcred",
         r#"{"type":"ssh","hostname":"127.0.0.1","password":"vaultpass"}"#,
     ));
-    let app = build_quick_connect_router(db, mock_vault_state(mock), None, "vault");
+    let recordings_dir = tempfile::tempdir().expect("temp dir");
+    let app = build_quick_connect_router(
+        db,
+        mock_vault_state(mock),
+        None,
+        recordings_dir.path(),
+        "vault",
+    );
     let response = app
         .oneshot(make_auth_request(
             "GET",

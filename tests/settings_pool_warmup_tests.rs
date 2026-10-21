@@ -27,8 +27,8 @@ use persea::db_pool::DbPool;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn deep_health_ping_after_install_is_fast_and_worker_proven() {
-    let dir = std::env::temp_dir().join(format!("persea-289-warm-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = tempfile::tempdir().expect("temp dir");
+    let dir = dir.path();
 
     // Mirror main.rs: connect + run migrations on the main runtime, THEN
     // install the pool as the active store.

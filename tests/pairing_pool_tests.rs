@@ -38,8 +38,8 @@ async fn pairing_insert_uses_pool_store_when_active_and_reports_fallback_when_no
 
     // Mirror main.rs: connect + run migrations on the test's main runtime,
     // THEN install the pool as the active store (spawns the db worker).
-    let dir = std::env::temp_dir().join(format!("persea-319-pairing-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = tempfile::tempdir().expect("temp dir");
+    let dir = dir.path();
     let sqlite_path = dir.join("pairing.db");
     let pool = DbPool::connect(&format!("sqlite://{}?mode=rwc", sqlite_path.display()))
         .await

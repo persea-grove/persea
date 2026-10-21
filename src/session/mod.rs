@@ -409,8 +409,7 @@ mod tests {
         // Build a config pointing at a unique temp recording dir so the
         // real dir isn't touched and parallel tests don't collide.
         let mut config = crate::config::Config::default();
-        let tmp =
-            std::env::temp_dir().join(format!("persea-sessmgr-test-{}", uuid::Uuid::new_v4()));
+        let tmp = tempfile::tempdir().expect("temp dir").path().to_path_buf();
         config.recording_path = Some(tmp.clone());
         // xvnc/chromium paths are only stored, not exec'd — placeholders are fine.
         config.xvnc_path = "/bin/true".into();

@@ -9,10 +9,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use uuid::Uuid;
 
-fn temp_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("persea-thumb-test-{tag}-{}", Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    dir
+fn temp_dir(tag: &str) -> (tempfile::TempDir, PathBuf) {
+    // Unique dir, removed on drop (even on panic). The tag is
+    // documentation-only now that each dir is uniquely named.
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let path = dir.path().to_path_buf();
+    let _ = tag;
+    (dir, path)
 }
 
 fn thumbnails_dir(recording_dir: &Path) -> PathBuf {
@@ -40,7 +43,7 @@ fn manager_without_db(recording_dir: &Path) -> Arc<SessionManager> {
 
 #[test]
 fn orphaned_thumbnail_is_deleted_live_one_kept() {
-    let dir = temp_dir("orphan");
+    let (_tmp, dir) = temp_dir("orphan");
     let db = db::init_db(Path::new(":memory:")).unwrap();
     let live = Uuid::new_v4();
     let orphan = Uuid::new_v4();
@@ -81,7 +84,7 @@ fn orphaned_thumbnail_is_deleted_live_one_kept() {
 
 #[test]
 fn completed_session_thumbnail_is_kept() {
-    let dir = temp_dir("completed");
+    let (_tmp, dir) = temp_dir("completed");
     let db = db::init_db(Path::new(":memory:")).unwrap();
     let ended = Uuid::new_v4();
     db::insert_session_history(
@@ -113,7 +116,7 @@ fn completed_session_thumbnail_is_kept() {
 
 #[test]
 fn vdi_and_non_session_files_are_never_touched() {
-    let dir = temp_dir("vdi");
+    let (_tmp, dir) = temp_dir("vdi");
     let db = db::init_db(Path::new(":memory:")).unwrap();
     let vdi_thumb = thumbnails_dir(&dir).join("vdi-some-container.jpg");
     let stray = thumbnails_dir(&dir).join("notes.txt");
@@ -134,7 +137,7 @@ fn vdi_and_non_session_files_are_never_touched() {
 
 #[test]
 fn missing_thumbnails_dir_is_an_empty_pass() {
-    let dir = temp_dir("missing-dir");
+    let (_tmp, dir) = temp_dir("missing-dir");
     let db = db::init_db(Path::new(":memory:")).unwrap();
     let manager = manager_with_db(&dir, db);
     let result = cleanup_pass(&manager).unwrap();
@@ -143,7 +146,7 @@ fn missing_thumbnails_dir_is_an_empty_pass() {
 
 #[test]
 fn db_down_skips_pass_and_keeps_files() {
-    let dir = temp_dir("db-down");
+    let (_tmp, dir) = temp_dir("db-down");
     let orphan = Uuid::new_v4();
     let orphan_path = write_thumbnail(&dir, orphan);
 

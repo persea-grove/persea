@@ -20,10 +20,13 @@ const TEST_KEY_HEX: &str = "00112233445566778899aabbccddeeff00112233445566778899
 const PLAIN_CONTENT: &[u8] = b"4.3\nsize 800,600\n";
 const ENC_PLAINTEXT: &[u8] = b"4.3\nsize 1024,768\n";
 
-fn temp_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("persea-rec-test-{tag}-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).expect("create temp recordings dir");
-    dir
+fn temp_dir(tag: &str) -> (tempfile::TempDir, PathBuf) {
+    // Unique dir under the OS temp dir, removed on drop (even on panic).
+    let tmp = tempfile::tempdir().expect("create temp recordings dir");
+    let path = tmp.path().join("recordings");
+    std::fs::create_dir_all(&path).unwrap();
+    let _ = tag;
+    (tmp, path)
 }
 
 fn admin() -> AuthIdentity {
@@ -96,7 +99,7 @@ fn test_meta() -> RecordingMeta {
 
 #[tokio::test]
 async fn listing_includes_plain_and_encrypted_recordings() {
-    let dir = temp_dir("listing");
+    let (_tmp, dir) = temp_dir("listing");
     std::fs::write(dir.join("session-a.guac"), PLAIN_CONTENT).unwrap();
     // Encrypted-at-rest recording: plaintext is written, encrypted in place.
     let enc_src = dir.join("session-b.guac");
@@ -146,7 +149,7 @@ async fn listing_includes_plain_and_encrypted_recordings() {
 
 #[tokio::test]
 async fn listing_requires_poweruser_role() {
-    let dir = temp_dir("listing-forbidden");
+    let (_tmp, dir) = temp_dir("listing-forbidden");
     std::fs::write(dir.join("session-a.guac"), PLAIN_CONTENT).unwrap();
     let viewer = AuthIdentity::User {
         email: "viewer@example.com".into(),
@@ -161,7 +164,7 @@ async fn listing_requires_poweruser_role() {
 
 #[tokio::test]
 async fn listing_without_identity_is_forbidden() {
-    let dir = temp_dir("listing-noauth");
+    let (_tmp, dir) = temp_dir("listing-noauth");
     std::fs::write(dir.join("session-a.guac"), PLAIN_CONTENT).unwrap();
     let router = test_router(&dir, false, None);
     let resp = router.oneshot(req_get("/api/recordings")).await.unwrap();
@@ -172,7 +175,7 @@ async fn listing_without_identity_is_forbidden() {
 
 #[tokio::test]
 async fn serve_plain_recording_streams_content() {
-    let dir = temp_dir("serve-plain");
+    let (_tmp, dir) = temp_dir("serve-plain");
     std::fs::write(dir.join("plain.guac"), PLAIN_CONTENT).unwrap();
     let router = test_router(&dir, false, Some(admin()));
     let resp = router
@@ -185,7 +188,7 @@ async fn serve_plain_recording_streams_content() {
 
 #[tokio::test]
 async fn serve_encrypted_recording_by_enc_name_decrypts() {
-    let dir = temp_dir("serve-enc-name");
+    let (_tmp, dir) = temp_dir("serve-enc-name");
     let src = dir.join("enc.guac");
     std::fs::write(&src, ENC_PLAINTEXT).unwrap();
     encrypt_recording_file(&src, TEST_KEY_HEX).unwrap();
@@ -200,7 +203,7 @@ async fn serve_encrypted_recording_by_enc_name_decrypts() {
 
 #[tokio::test]
 async fn serve_encrypted_recording_by_plain_name_decrypts() {
-    let dir = temp_dir("serve-enc-plain-name");
+    let (_tmp, dir) = temp_dir("serve-enc-plain-name");
     let src = dir.join("enc2.guac");
     std::fs::write(&src, ENC_PLAINTEXT).unwrap();
     encrypt_recording_file(&src, TEST_KEY_HEX).unwrap();
@@ -216,7 +219,7 @@ async fn serve_encrypted_recording_by_plain_name_decrypts() {
 
 #[tokio::test]
 async fn serve_unknown_recording_returns_error() {
-    let dir = temp_dir("serve-missing");
+    let (_tmp, dir) = temp_dir("serve-missing");
     let router = test_router(&dir, false, Some(admin()));
     let resp = router
         .oneshot(req_get("/api/recordings/missing.guac"))
@@ -229,7 +232,7 @@ async fn serve_unknown_recording_returns_error() {
 
 #[tokio::test]
 async fn delete_encrypted_recording_removes_file_and_meta() {
-    let dir = temp_dir("delete-enc");
+    let (_tmp, dir) = temp_dir("delete-enc");
     let src = dir.join("del.guac");
     std::fs::write(&src, ENC_PLAINTEXT).unwrap();
     write_meta(&src, &test_meta()).unwrap();
@@ -249,7 +252,7 @@ async fn delete_encrypted_recording_removes_file_and_meta() {
 
 #[tokio::test]
 async fn delete_plain_recording_removes_file() {
-    let dir = temp_dir("delete-plain");
+    let (_tmp, dir) = temp_dir("delete-plain");
     std::fs::write(dir.join("plain2.guac"), PLAIN_CONTENT).unwrap();
     let router = test_router(&dir, false, Some(admin()));
     let resp = router
@@ -262,7 +265,7 @@ async fn delete_plain_recording_removes_file() {
 
 #[tokio::test]
 async fn delete_plain_name_also_removes_enc_sibling() {
-    let dir = temp_dir("delete-sibling");
+    let (_tmp, dir) = temp_dir("delete-sibling");
     let src = dir.join("both.guac");
     std::fs::write(&src, ENC_PLAINTEXT).unwrap();
     encrypt_recording_file(&src, TEST_KEY_HEX).unwrap();
@@ -279,7 +282,7 @@ async fn delete_plain_name_also_removes_enc_sibling() {
 
 #[tokio::test]
 async fn delete_unknown_recording_returns_error() {
-    let dir = temp_dir("delete-missing");
+    let (_tmp, dir) = temp_dir("delete-missing");
     let router = test_router(&dir, false, Some(admin()));
     let resp = router
         .oneshot(req_del("/api/recordings/missing.guac"))
@@ -290,7 +293,7 @@ async fn delete_unknown_recording_returns_error() {
 
 #[tokio::test]
 async fn delete_requires_admin_role() {
-    let dir = temp_dir("delete-forbidden");
+    let (_tmp, dir) = temp_dir("delete-forbidden");
     std::fs::write(dir.join("plain3.guac"), PLAIN_CONTENT).unwrap();
     let poweruser = AuthIdentity::User {
         email: "op@example.com".into(),

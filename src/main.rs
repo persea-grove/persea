@@ -3776,15 +3776,8 @@ mod tests {
         use axum::{body::Body, http::Request};
         use tower::ServiceExt;
 
-        let dir = std::env::temp_dir().join(format!(
-            "persea-notfound-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let tmp_dir = tempfile::tempdir().expect("temp dir");
+        let dir = tmp_dir.path();
 
         let app = Router::new()
             .fallback_service(
@@ -3827,8 +3820,6 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         assert_eq!(resp.headers()["content-type"], "application/json");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

@@ -17,12 +17,10 @@ fn allow_bridge_startup_mirror_round_trip() {
 
 #[test]
 fn config_toml_allow_bridge_parses() {
-    let dir = std::env::temp_dir().join(format!("persea-bridge-test-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("config.toml");
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let path = tmp.path().join("config.toml");
     std::fs::write(&path, "[desktop]\nallow_bridge = true\n").unwrap();
     let cfg = Config::load(Some(path.to_str().unwrap()));
-    std::fs::remove_dir_all(&dir).ok();
     assert!(cfg
         .desktop
         .as_ref()
