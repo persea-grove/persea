@@ -45,6 +45,9 @@ fn new_manager(db: Option<Db>) -> AppState {
     let tmp = std::env::temp_dir().join(format!("persea-session-ux-test-{}", Uuid::new_v4()));
     let mut config = Config::default();
     config.recording_path = Some(tmp.join("recordings"));
+    // Port 1 is never a guacd: keep the create-path tests deterministic on
+    // hosts that happen to run one locally.
+    config.guacd_addr = "127.0.0.1:1".into();
     match db {
         Some(db) => Arc::new(SessionManager::new_with_db(config, None, db)),
         None => Arc::new(SessionManager::new(config, None)),
@@ -136,6 +139,7 @@ async fn create_with_reason_passes_the_reason_gate_when_required() {
     });
     let tmp = std::env::temp_dir().join(format!("persea-session-ux-{}", Uuid::new_v4()));
     config.recording_path = Some(tmp.join("recordings"));
+    config.guacd_addr = "127.0.0.1:1".into();
     let manager: AppState = Arc::new(SessionManager::new(config, None));
 
     let mut req = ssh_req(Some("127.0.0.1"));
