@@ -32,6 +32,18 @@ Fix any clippy warnings before submitting a PR. The project follows standard
 Rust conventions: snake_case functions, CamelCase types, `//` line comments
 (never `/* */` block comments), `//!` module doc comments at file top.
 
+## Destructive-action dialogs
+
+Irreversible actions (delete, overwrite, revoke, terminate, disconnect-and-destroy) look destructive and ask before they act:
+
+- Confirm button is red: `.btn-danger` for full-weight dialogs, `.btn-danger-outline` for row-level actions.
+- Label the verb and the scope ("Delete user", "Overwrite all connections"), never a bare "Apply"/"OK".
+- Cancel is the focused element when the dialog opens; Escape and scrim clicks must not dismiss irreversible dialogs (no `[data-close]` on the Cancel button).
+- Name the target and state the consequences in the dialog body ("will be permanently removed; sessions terminated; tokens revoked").
+- After acting, the status line reports what happened with the real count.
+
+Reference implementation: "Apply RDP defaults?" in `templates/pages/admin/settings.html` and the delete-user dialog in `templates/partials/admin/users-section.html`.
+
 ## Testing
 
 ```bash

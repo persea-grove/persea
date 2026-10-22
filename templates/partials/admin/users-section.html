@@ -158,12 +158,16 @@
 <div id="delete-user-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="delete-user-title">
     <div class="card w-full max-w-sm">
         <h2 id="delete-user-title" class="text-lg font-bold text-[var(--text-primary)] mb-2">Delete User</h2>
-        <p class="text-sm text-[var(--text-muted)] mb-4">This action cannot be undone. User <span id="delete-user-name" class="text-[var(--text-primary)]"></span> will be permanently removed.</p>
+        <p class="text-sm text-[var(--text-muted)] mb-4">
+            User <span id="delete-user-name" class="text-[var(--text-primary)]"></span> will be permanently removed.
+            This cannot be undone: their active sessions are terminated, their API tokens are revoked,
+            and their password and settings are deleted.
+        </p>
         <form id="delete-user-form">
             <input type="hidden" name="email" id="delete-user-email">
             <div class="flex justify-end gap-3">
-                <button type="button" id="btn-cancel-delete-user" data-close class="btn btn-secondary btn-sm">Cancel</button>
-                <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+                <button type="button" id="btn-cancel-delete-user" class="btn btn-secondary btn-sm">Cancel</button>
+                <button type="submit" class="btn btn-danger btn-sm">Delete User</button>
             </div>
         </form>
     </div>
@@ -210,6 +214,9 @@ function deleteUser(email) {
     document.getElementById('delete-user-name').textContent = email;
     document.getElementById('delete-user-email').value = email;
     openModal('delete-user-modal');
+    // Cancel is the focus default: Enter must not delete the user. The
+    // dialog has no data-close button and no Escape/scrim handler.
+    document.getElementById('btn-cancel-delete-user').focus();
 }
 
 function toggleUserStatus(email, currentStatus) {
@@ -240,7 +247,6 @@ function renderUserRow(user) {
     var statusClass = user.disabled ? 'text-red-400' : 'text-emerald-400';
     var statusText = user.disabled ? 'Disabled' : 'Active';
     var toggleLabel = user.disabled ? 'Enable' : 'Disable';
-    var toggleClass = user.disabled ? 'text-emerald-400 hover:text-emerald-300' : 'text-amber-400 hover:text-amber-300';
     var statusLower = statusText.toLowerCase();
     var safeName = escapeHtml(user.name || '-');
     var safeEmail = escapeHtml(user.email || '-');
@@ -256,8 +262,10 @@ function renderUserRow(user) {
         '<td class="px-4 py-3 text-right text-sm">' +
             '<button data-action="edit-user" data-email="' + safeEmail + '" class="text-[var(--text-muted)] hover:text-[var(--text-secondary)] mr-3">Edit</button>' +
             '<button data-action="edit-role" data-email="' + safeEmail + '" data-role="' + escapeHtml(user.role || '') + '" data-custom-role="' + escapeHtml((user.custom_role && user.custom_role.name) || '') + '" class="text-[var(--text-muted)] hover:text-[var(--text-secondary)] mr-3">Edit Role</button>' +
-            '<button data-action="toggle-status" data-email="' + safeEmail + '" data-status="' + statusLower + '" class="' + toggleClass + ' mr-3">' + toggleLabel + '</button>' +
-            '<button data-action="delete-user" data-email="' + safeEmail + '" class="text-red-400 hover:text-red-300">Delete</button>' +
+            // Disable/Enable is neutral and reversible; it sits separated
+            // from Delete so the two are not one mis-click apart.
+            '<button data-action="toggle-status" data-email="' + safeEmail + '" data-status="' + statusLower + '" class="btn btn-secondary mr-2">' + toggleLabel + '</button>' +
+            '<button data-action="delete-user" data-email="' + safeEmail + '" class="btn btn-danger-outline">Delete</button>' +
         '</td></tr>';
 }
 

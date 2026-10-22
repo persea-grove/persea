@@ -482,6 +482,55 @@ body {
     background: rgba(239,68,68,0.15);
 }
 
+/* Destructive buttons always keep a red edge: hover deepens the same
+   wash, focus uses the --danger token instead of the green focus ring. */
+.btn-danger:active {
+    background: rgba(239,68,68,0.22);
+}
+
+.btn-danger:focus-visible {
+    outline: 2px solid var(--danger);
+    outline-offset: 2px;
+}
+
+/* Row-level destructive actions (Delete next to neutral controls): the
+   same red vocabulary at a lower weight. Sized to a 32px target. */
+.btn-danger-outline {
+    background: transparent;
+    color: var(--danger);
+    border: 1px solid rgba(239,68,68,0.35);
+    min-width: 2rem;
+    min-height: 2rem;
+}
+
+.btn-danger-outline:hover {
+    background: var(--danger-bg);
+    border-color: rgba(239,68,68,0.6);
+}
+
+.btn-danger-outline:active {
+    background: rgba(239,68,68,0.15);
+}
+
+.btn-danger-outline:focus-visible {
+    outline: 2px solid var(--danger);
+    outline-offset: 2px;
+}
+
+.light .btn-danger {
+    color: #b91c1c;
+}
+
+.light .btn-danger-outline {
+    color: #b91c1c;
+    border-color: rgba(185,28,28,0.4);
+}
+
+.light .btn-danger-outline:hover {
+    background: rgba(185,28,28,0.08);
+    border-color: rgba(185,28,28,0.6);
+}
+
 /* Logout (header) uses a neutral outline so the danger hue stays reserved
    for destructive actions (Delete, Clear). Scoped to #logout-btn: every
    other .btn-danger keeps the red treatment. */
