@@ -192,12 +192,24 @@
         #toast.show { opacity: 1; }
 
         /* ── Overlays ────────────────────────────────────────── */
-        #disconnected-overlay, #banner-overlay {
+        #disconnected-overlay, #banner-overlay, #creds-overlay {
             display: none; position: fixed; inset: 0;
             background: rgba(0,0,0,0.85); z-index: 3000;
             justify-content: center; align-items: center;
         }
-        #disconnected-overlay.visible, #banner-overlay.visible { display: flex; }
+        #disconnected-overlay.visible, #banner-overlay.visible, #creds-overlay.visible { display: flex; }
+        #creds-overlay .overlay-box { text-align: left; }
+        #creds-overlay label {
+            display: block; margin: 0.7em 0 0.25em; font-size: 0.9em;
+            color: var(--text-muted); font-family: monospace;
+        }
+        #creds-overlay input {
+            width: 100%; max-width: 320px; padding: 0.5em 0.7em;
+            background: var(--input); color: var(--text);
+            border: 1px solid var(--border); border-radius: 4px;
+            font-family: monospace; font-size: 1em; box-sizing: border-box;
+        }
+        #creds-error { color: #e06068; margin: 0.8em 0 0; min-height: 1.2em; font-size: 0.9em; font-family: monospace; }
         .overlay-box {
             background: var(--bg); border: 1px solid var(--border);
             border-radius: 8px; padding: 2em 3em;
@@ -484,6 +496,28 @@
         </div>
     </div>
 
+    <!-- Interactive-credentials prompt (persea#254): the target rejected the
+         forwarded (auth-session) credential while the session was opening.
+         Escape and the scrim deliberately do nothing here so a typed password
+         is never silently discarded; Cancel is the explicit way out. -->
+    <div id="creds-overlay" role="dialog" aria-modal="true" aria-label="Credentials required">
+        <div class="overlay-box">
+            <h2 id="creds-title">Sign in to the target</h2>
+            <p id="creds-message">The target rejected the sign-in forwarded from your session. Enter the credentials for this target to continue.</p>
+            <form id="creds-form">
+                <label for="creds-username">Username</label>
+                <input type="text" id="creds-username" name="username" autocomplete="off" spellcheck="false">
+                <label for="creds-password">Password</label>
+                <input type="password" id="creds-password" name="password" autocomplete="new-password">
+            </form>
+            <div aria-live="polite" id="creds-error"></div>
+            <div style="margin-top: 1em">
+                <button id="btn-creds-connect" class="btn-primary">Connect</button>
+                <button id="btn-creds-cancel" class="btn-secondary">Cancel</button>
+            </div>
+        </div>
+    </div>
+
     <!-- ── Display ────────────────────────────────────────── -->
     <div id="display"></div>
 
@@ -517,6 +551,13 @@
         // `size` instructions, so the session stays at the protocol defaults
         // and the display only scales to fit.
         var sessionAutoSize = true;
+        // Persea#254: true when the session's target credentials came from
+        // the owning auth session (forward_session_credentials). With it set,
+        // an upstream 769 auth failure means "prompt for interactive
+        // credentials" instead of a plain error.
+        var credentialsForwarded = false;
+        var sessionUsername = '';
+        var credsPromptOpen = false;
         var protocol = '';
         var targetHost = '';
         var driveEnabled = false;
@@ -1186,6 +1227,8 @@
                     baseTitle = entryDisplayName;
                     if (!sessionLive) document.title = baseTitle;
                 }
+                if (session && session.credentials_forwarded) credentialsForwarded = true;
+                if (session && session.username) sessionUsername = session.username;
                 sessionIdleTimeoutSecs = parseInt((session && session.session_idle_timeout_secs) || 0, 10) || 0;
                 // Deferred/ephemeral-key sessions are the only reconnectable
                 // ones — and the ONLY sessions that carry a banner (the
@@ -1286,6 +1329,10 @@
         // a live one makes the server spawn a fresh guacd connection — so
         // check the server-side session status before scheduling a reconnect.
         function checkSessionEnded() {
+            // While the interactive-credentials prompt (persea#254) is open,
+            // its retry will determine the outcome; the session-end flow must
+            // not overwrite the dialog with the "Session Ended" overlay.
+            if (credsPromptOpen) return;
             if (userDisconnected) return;
             var headers = {};
             if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
@@ -1781,6 +1828,18 @@
                 statusEl.className = '';
                 setLiveState('ended');
                 if (_thumbInterval) { clearInterval(_thumbInterval); _thumbInterval = null; }
+                // Persea#254: guacd reports a rejected upstream credential as
+                // error 769 (GUAC_PROTOCOL_STATUS_CLIENT_UNAUTHORIZED). When
+                // this session was created from forwarded auth-session
+                // credentials — and there is an address-book entry to retry
+                // against — prompt for interactive credentials instead of
+                // showing the plain error. Ad-hoc sessions and any other
+                // status keep the ordinary error path.
+                if (status && status.code === 769 && credentialsForwarded && relaunchInfo) {
+                    showCredsPrompt();
+                    if (rgFullscreenEl()) rgExitFullscreen();
+                    return;
+                }
                 document.getElementById('disconnected-title').textContent = 'Connection Error';
                 document.getElementById('disconnected-message').textContent = status.message || 'An error occurred.';
                 document.getElementById('disconnected-overlay').className = 'visible';
@@ -1797,6 +1856,111 @@
                     statusEl.textContent = 'Connection unstable...';
                 }
             };
+
+            // ── Interactive-credentials prompt (persea#254) ──
+            // Parse relaunchInfo.entry_key ("scope/folder/entry") into the
+            // address-book connect endpoint. One implementation, used by both
+            // the Reconnect button and the credentials prompt.
+            function entryConnectUrl() {
+                if (!relaunchInfo || !relaunchInfo.entry_key) return null;
+                var key = relaunchInfo.entry_key;
+                var firstSlash = key.indexOf('/');
+                var lastSlash = key.lastIndexOf('/');
+                if (firstSlash < 0 || lastSlash <= firstSlash) return null;
+                return '/api/addressbook/folders/' + encodeURIComponent(key.substring(0, firstSlash)) +
+                       '/' + encodeURIComponent(relaunchInfo.folder) +
+                       '/entries/' + encodeURIComponent(key.substring(lastSlash + 1)) + '/connect';
+            }
+            // Navigate to the fresh session's client URL, exactly like the
+            // Reconnect button: same-tab navigation in `same` mode, popup
+            // with a takeover fallback when the popup is blocked.
+            function goToClientUrl(clientUrl) {
+                if (getOpenMode() === 'same') { window.location.href = clientUrl; return; }
+                if (openSessionUrl(clientUrl)) {
+                    // The relaunched session lives in its own tab — this tab
+                    // is a dead session tab now: close it.
+                    setTimeout(closeOrNavigate, 500);
+                } else {
+                    // Popup blocked — take over this tab instead of stranding
+                    // the user on the overlay.
+                    window.location.href = clientUrl;
+                }
+            }
+            function showCredsPrompt() {
+                credsPromptOpen = true;
+                // Prefill the username so only the password usually needs
+                // typing. textContent/value only: user data is never placed
+                // in innerHTML.
+                document.getElementById('creds-username').value = sessionUsername;
+                document.getElementById('creds-password').value = '';
+                document.getElementById('creds-error').textContent = '';
+                document.getElementById('creds-overlay').className = 'visible';
+                document.getElementById('creds-username').focus();
+            }
+            function submitCreds() {
+                var username = document.getElementById('creds-username').value;
+                var password = document.getElementById('creds-password').value;
+                var errorEl = document.getElementById('creds-error');
+                if (!username && !password) { errorEl.textContent = 'Enter the credentials for this target.'; return; }
+                var btn = document.getElementById('btn-creds-connect');
+                btn.disabled = true;
+                errorEl.textContent = '';
+                var connectUrl = entryConnectUrl();
+                if (!connectUrl) {
+                    btn.disabled = false;
+                    errorEl.textContent = 'This session has no address-book entry to retry against.';
+                    return;
+                }
+                var headers = { 'Content-Type': 'application/json' };
+                if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
+                fetch(connectUrl, {
+                    method: 'POST', headers: headers, credentials: 'same-origin',
+                    body: JSON.stringify({
+                        username: username, password: password,
+                        width: window.innerWidth, height: window.innerHeight,
+                        dpi: Math.round((window.devicePixelRatio || 1) * 96)
+                    })
+                })
+                .then(function(res) {
+                    return res.json().then(function(d) {
+                        return { ok: res.ok, body: d };
+                    });
+                })
+                .then(function(r) {
+                    // A second credentials_required (the retried password was
+                    // also rejected) shows inline: no automatic loop.
+                    if (r.body && r.body.credentials_required) {
+                        btn.disabled = false;
+                        errorEl.textContent = 'The target rejected those credentials. Try again.';
+                        return;
+                    }
+                    if (!r.ok || !r.body || !r.body.client_url) {
+                        btn.disabled = false;
+                        errorEl.textContent = 'Could not reconnect to the target.';
+                        return;
+                    }
+                    credsPromptOpen = false;
+                    document.getElementById('creds-overlay').className = '';
+                    goToClientUrl(r.body.client_url);
+                })
+                .catch(function() {
+                    btn.disabled = false;
+                    errorEl.textContent = 'Could not reconnect to the target. Try again.';
+                });
+            }
+            document.getElementById('btn-creds-connect').addEventListener('click', submitCreds);
+            document.getElementById('creds-form').addEventListener('submit', function(e) { e.preventDefault(); submitCreds(); });
+            document.getElementById('creds-password').addEventListener('keydown', function(e) {
+                if (e.key === 'Enter') { e.preventDefault(); submitCreds(); }
+            });
+            document.getElementById('btn-creds-cancel').addEventListener('click', function() {
+                credsPromptOpen = false;
+                document.getElementById('creds-overlay').className = '';
+                // Explicit user choice to keep this tab and browse — same
+                // exit as "Back to connections": share viewers land on the
+                // site home (they have no Connections page).
+                window.location.href = shareToken ? '/' : '/connections.html';
+            });
 
             // Disconnected overlay buttons
             // In `same` mode the session page IS the user's main tab, so the
@@ -1826,16 +1990,11 @@
                 btn.disabled = true; btn.textContent = 'Reconnecting...';
                 if (shareToken) { window.location.reload(); return; }
                 if (!relaunchInfo) { closeOrNavigate(); return; }
-                var key = relaunchInfo.entry_key;
-                var firstSlash = key.indexOf('/');
-                var lastSlash = key.lastIndexOf('/');
-                if (firstSlash < 0 || lastSlash <= firstSlash) { closeOrNavigate(); return; }
-                var scope = key.substring(0, firstSlash);
-                var folder = relaunchInfo.folder;
-                var entry = key.substring(lastSlash + 1);
+                var connectUrl = entryConnectUrl();
+                if (!connectUrl) { closeOrNavigate(); return; }
                 var headers = { 'Content-Type': 'application/json' };
                 if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
-                fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries/' + encodeURIComponent(entry) + '/connect', {
+                fetch(connectUrl, {
                     method: 'POST', headers: headers, credentials: 'same-origin',
                     body: JSON.stringify({ width: window.innerWidth, height: window.innerHeight, dpi: Math.round((window.devicePixelRatio || 1) * 96) })
                 })
@@ -1843,16 +2002,7 @@
                     if (!res.ok) { btn.disabled = false; btn.textContent = 'Reconnect'; closeOrNavigate(); return; }
                     return res.json().then(function(d) {
                         if (!d.client_url) { btn.disabled = false; btn.textContent = 'Reconnect'; closeOrNavigate(); return; }
-                        if (getOpenMode() === 'same') { window.location.href = d.client_url; return; }
-                        if (openSessionUrl(d.client_url)) {
-                            // The relaunched session lives in its own tab —
-                            // this tab is a dead session tab now: close it.
-                            setTimeout(closeOrNavigate, 500);
-                        } else {
-                            // Popup blocked — take over this tab instead of
-                            // stranding the user on the overlay.
-                            window.location.href = d.client_url;
-                        }
+                        goToClientUrl(d.client_url);
                     });
                 })
                 .catch(function() { btn.disabled = false; btn.textContent = 'Reconnect'; closeOrNavigate(); });

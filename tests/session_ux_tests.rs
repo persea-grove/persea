@@ -96,6 +96,7 @@ fn test_session(id: Uuid, created_by: &str, status: SessionStatus) -> Session {
         last_activity: std::sync::atomic::AtomicI64::new(chrono::Utc::now().timestamp()),
         source_ip: None,
         user_id: Some(created_by.to_string()),
+        credentials_forwarded: false,
     }
 }
 

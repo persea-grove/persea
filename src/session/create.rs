@@ -1603,6 +1603,7 @@ impl SessionManager {
             last_activity: std::sync::atomic::AtomicI64::new(Utc::now().timestamp()),
             source_ip: client_ip.clone(),
             user_id: Some(created_by.clone()),
+            credentials_forwarded: req.credentials_forwarded.unwrap_or(false),
         };
 
         let info = session.info();
@@ -2969,6 +2970,7 @@ mod tests {
             last_activity: std::sync::atomic::AtomicI64::new(chrono::Utc::now().timestamp()),
             source_ip: None,
             user_id: Some("alice".into()),
+            credentials_forwarded: false,
         }
     }
 

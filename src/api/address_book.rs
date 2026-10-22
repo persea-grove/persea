@@ -934,6 +934,7 @@ pub(crate) fn params_from_entry(
         entry_display_name: entry.display_name.clone(),
         max_recordings: entry.max_recordings,
         allow_sharing: entry.allow_sharing,
+        credentials_forwarded: None, // set by each connect handler below
         fullscreen_on_connect: entry.fullscreen_on_connect,
         autohide_side_tabs: entry.autohide_side_tabs,
         ssh: Some(SshParams {
@@ -2120,6 +2121,13 @@ pub async fn ab_connect_entry(
             "Connect uses session-forwarded credentials"
         );
     }
+    // The marker says the session credential was TRIED. When the caller
+    // supplied an explicit password the request override wins in
+    // `create_req` (see `params_from_entry`), so the attempt did not
+    // actually use the session credential and must not be classified as a
+    // session-credential failure (persea#254).
+    let credentials_forwarded =
+        used_session_credentials && req.password.as_deref().is_none_or(|p| p.is_empty());
 
     let ab_entry = if !crate::vault::entry_credential_variables(&ab_entry).is_empty() {
         let user_email = match &id {
@@ -2158,13 +2166,14 @@ pub async fn ab_connect_entry(
     let prompt_username = ab_entry.username.clone();
     let prompt_domain = ab_entry.domain.clone();
     let prompt_display_name = ab_entry.display_name.clone();
-    let create_req = params_from_entry(
+    let mut create_req = params_from_entry(
         &ab_entry,
         ConnectOverrides::from_connect_request(&req),
         ab_entry_key,
         &folder,
     )
     .map_err(|UnknownSessionType(t)| AppError::Internal(format!("unknown session type: {}", t)))?;
+    create_req.credentials_forwarded = Some(credentials_forwarded);
 
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
     let client_ip_addr = client_ip(&headers, addr.ip(), &proxies);
@@ -2203,8 +2212,9 @@ pub async fn ab_connect_entry(
             // return the interactive-credentials signal so the client can
             // prompt and retry without losing the session context. Any
             // other failure (target unreachable, protocol error) surfaces
-            // directly.
-            if used_session_credentials && is_auth_failure(&e) {
+            // directly. Only a TRIED session credential counts (persea#254):
+            // a rejected explicit password shows the error instead.
+            if credentials_forwarded && is_auth_failure(&e) {
                 return Ok(Json(json!({
                     "credentials_required": true,
                     "username": prompt_username,
@@ -3397,6 +3407,10 @@ pub async fn quick_connect(
                 "Quick connect uses session-forwarded credentials"
             );
         }
+        // Quick connect carries no credential overrides (the query string is
+        // display geometry only), so a tried session credential is the
+        // credential source of the attempt (persea#254).
+        let credentials_forwarded = used_session_credentials;
 
         let ab_entry = if !crate::vault::entry_credential_variables(&ab_entry).is_empty() {
             let user_email = match &id {
@@ -3456,13 +3470,16 @@ pub async fn quick_connect(
         let prompt_username = ab_entry.username.clone();
         let prompt_domain = ab_entry.domain.clone();
         let prompt_display_name = ab_entry.display_name.clone();
-        let create_req = match params_from_entry(
+        let mut create_req = match params_from_entry(
             &ab_entry,
             ConnectOverrides::from_quick_connect_query(&query),
             ab_entry_key,
             folder,
         ) {
-            Ok(create_req) => create_req,
+            Ok(mut create_req) => {
+                create_req.credentials_forwarded = Some(credentials_forwarded);
+                create_req
+            }
             Err(UnknownSessionType(t)) => {
                 return quick_connect_error(
                     StatusCode::BAD_REQUEST,
@@ -3494,7 +3511,7 @@ pub async fn quick_connect(
                 // signal (the inline credential form) so the client can
                 // prompt and retry. Any other failure (target unreachable,
                 // protocol error) surfaces directly.
-                if used_session_credentials && is_auth_failure(&e) {
+                if credentials_forwarded && is_auth_failure(&e) {
                     return quick_connect_credential_form(
                         scope,
                         folder,
@@ -6962,6 +6979,212 @@ mod tests {
             "a network failure must not signal credentials_required, got: {}",
             body
         );
+    }
+
+    #[tokio::test]
+    async fn ab_connect_entry_explicit_password_auth_failure_surfaces_directly() {
+        // Persea#254: when the caller supplies an explicit password the
+        // request override wins in `create_req`, so the session credential
+        // was never the password actually tried; a rejected explicit
+        // password must NOT produce the credentials_required signal (the
+        // user typed it, so the failure surfaces directly).
+        let db = test_db();
+        let (uid, session) = connect_fixture(&db);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = mock_guacd_error(listener, 0x0301);
+
+        let manager = session_credentials_manager_with_guacd(true, &addr.to_string());
+        manager.store_session_credentials(
+            &session,
+            uid,
+            "alice",
+            retained_enc("p@ssword-session"),
+            3600,
+        );
+
+        let app = build_connect_router_with_manager(db.clone(), test_vault_state(), manager);
+        let response = app
+            .oneshot(session_json_req(
+                "POST",
+                "/api/addressbook/folders/shared/Clients/entries/web1/connect",
+                &session,
+                json!({"password": "p@ssword-explicit"}),
+            ))
+            .await
+            .unwrap();
+        server.abort();
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let body = body_json(response).await;
+        assert_ne!(
+            body.get("credentials_required"),
+            Some(&json!(true)),
+            "an explicit-password auth failure must not signal credentials_required, got: {}",
+            body
+        );
+    }
+
+    /// Mock guacd that completes the handshake: `args` for `select`,
+    /// `ready` for `connect` (like the live-boot mock in
+    /// protocol_defaults_tests.rs). Accepts connections in a loop so one
+    /// instance can serve several session creations.
+    async fn mock_guacd_ok(listener: tokio::net::TcpListener) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        loop {
+            let Ok((sock, _)) = listener.accept().await else {
+                return;
+            };
+            tokio::spawn(async move {
+                let mut sock = sock;
+                let mut parser = crate::protocol::InstructionParser::new();
+                let mut buf = [0u8; 4096];
+                loop {
+                    let Ok(n) = sock.read(&mut buf).await else {
+                        break;
+                    };
+                    if n == 0 {
+                        break;
+                    }
+                    let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
+                    for instr in parser.receive(&chunk).into_iter().flatten() {
+                        if instr.opcode == "select" {
+                            let _ = sock
+                                .write_all(
+                                    crate::protocol::Instruction::new(
+                                        "args",
+                                        vec![
+                                            "hostname".into(),
+                                            "port".into(),
+                                            "username".into(),
+                                            "password".into(),
+                                        ],
+                                    )
+                                    .encode()
+                                    .as_bytes(),
+                                )
+                                .await;
+                        } else if instr.opcode == "connect" {
+                            let _ = sock
+                                .write_all(
+                                    crate::protocol::Instruction::new(
+                                        "ready",
+                                        vec!["mock-conn".into()],
+                                    )
+                                    .encode()
+                                    .as_bytes(),
+                                )
+                                .await;
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    /// Connect router plus the session-info GET endpoint, so a test can
+    /// read the created session's `SessionInfo` flags back.
+    fn build_connect_router_with_get_session(
+        db: Db,
+        vault: VaultState,
+        manager: AppState,
+    ) -> axum::Router {
+        use axum::routing::{get, post};
+        axum::Router::new()
+            .route(
+                "/api/addressbook/folders/{scope}/{folder}/entries/{entry}/connect",
+                post(super::ab_connect_entry),
+            )
+            .route("/api/sessions/{id}", get(crate::api::sessions::get_session))
+            .with_state(manager)
+            .layer(axum::middleware::from_fn(crate::auth::require_auth))
+            .layer(Extension(db))
+            .layer(Extension(vault))
+            .layer(Extension(StorageKey(Some(TEST_ENC_KEY.into()))))
+    }
+
+    #[tokio::test]
+    async fn session_info_carries_credentials_forwarded() {
+        // Persea#254 acceptance: SessionInfo.credentials_forwarded is true
+        // when the attempt used the retained auth-session credentials and
+        // false otherwise, and it is always serialized.
+        let db = test_db();
+        let (uid, session) = connect_fixture(&db);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(mock_guacd_ok(listener));
+
+        let manager = session_credentials_manager_with_guacd(true, &addr.to_string());
+        let app =
+            build_connect_router_with_get_session(db.clone(), test_vault_state(), manager.clone());
+
+        // Forwarded: retained session credentials, no explicit password.
+        manager.store_session_credentials(
+            &session,
+            uid,
+            "alice",
+            retained_enc("p@ssword-session"),
+            3600,
+        );
+        let response = app
+            .clone()
+            .oneshot(session_json_req(
+                "POST",
+                "/api/addressbook/folders/shared/Clients/entries/web1/connect",
+                &session,
+                json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let info = body_json(response).await;
+        assert_eq!(
+            info["credentials_forwarded"],
+            json!(true),
+            "a session created from retained session credentials must carry credentials_forwarded=true, got: {}",
+            info
+        );
+        let sid = info["session_id"].as_str().unwrap().to_string();
+        let response = app
+            .clone()
+            .oneshot(session_req(
+                "GET",
+                &format!("/api/sessions/{}", sid),
+                &session,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(
+            body["credentials_forwarded"],
+            json!(true),
+            "GET /api/sessions/:id must serialize flags.credentials_forwarded=true, got: {}",
+            body
+        );
+
+        // Not forwarded: a fresh auth session for the same user carries no
+        // retained credentials, so the attempt is an ordinary connect.
+        let bob_session = db::create_auth_session(&db, uid, 3600).unwrap();
+        let response = app
+            .clone()
+            .oneshot(session_json_req(
+                "POST",
+                "/api/addressbook/folders/shared/Clients/entries/web1/connect",
+                &bob_session,
+                json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let info = body_json(response).await;
+        assert_eq!(
+            info["credentials_forwarded"],
+            json!(false),
+            "a plain connect must carry credentials_forwarded=false, got: {}",
+            info
+        );
+
+        server.abort();
     }
 
     /// Pinning test (persea#282 review): ad-hoc `?protocol=...`

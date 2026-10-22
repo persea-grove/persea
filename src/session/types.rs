@@ -297,6 +297,12 @@ pub struct CreateSessionRequest {
     /// the entry's `allow_sharing` flag; ad-hoc sessions are never
     /// shareable (per GitHub-less admin gating requirement).
     pub allow_sharing: Option<bool>,
+    /// True when the credentials this session was created with came from the
+    /// owning auth session's forwarded credentials (persea#254). The client
+    /// uses it to decide whether an upstream auth failure (769) means
+    /// "prompt the user for interactive credentials".
+    #[serde(default)]
+    pub credentials_forwarded: Option<bool>,
     /// Open the client in fullscreen on connect (#154). Populated from
     /// the source entry's `fullscreen_on_connect` flag; ad-hoc sessions
     /// leave it None and the client behaves as if false.
@@ -465,6 +471,11 @@ pub struct SessionInfo {
     /// instance (seen via the shared registry, not the local map).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub remote: bool,
+    /// True when the session's target credentials came from the owning
+    /// auth session's forwarded credentials (persea#254); client.html
+    /// prompts for interactive credentials on an upstream 769 auth
+    /// failure only when this is set.
+    pub credentials_forwarded: bool,
 }
 
 /// Kind of a session lifecycle event on the event feed.
@@ -606,6 +617,11 @@ pub struct Session {
     /// OIDC user ID (or created_by for non-OIDC sessions) for per-user
     /// concurrent session limits.
     pub user_id: Option<String>,
+    /// True when the session's target credentials came from the owning
+    /// auth session's forwarded credentials (persea#254). Surfaced in
+    /// `SessionInfo`; the client uses it to decide whether to prompt for
+    /// interactive credentials after an upstream auth failure.
+    pub credentials_forwarded: bool,
 }
 
 /// A short-lived viewer token issued by an admin to shadow an active session.
@@ -793,6 +809,7 @@ impl Session {
             owner_instance: None,
             owner_base_url: None,
             remote: false,
+            credentials_forwarded: self.credentials_forwarded,
         }
     }
 }
@@ -845,6 +862,7 @@ impl SessionInfo {
                 Some(row.owner_base_url.clone())
             },
             remote: true,
+            credentials_forwarded: false,
         })
     }
 }

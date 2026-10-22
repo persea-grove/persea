@@ -402,6 +402,7 @@ mod tests {
             last_activity: std::sync::atomic::AtomicI64::new(chrono::Utc::now().timestamp()),
             source_ip: None,
             user_id: Some("alice".into()),
+            credentials_forwarded: false,
         }
     }
 
