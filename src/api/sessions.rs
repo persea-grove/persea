@@ -1326,13 +1326,19 @@ mod drive_tests {
     /// Manager whose `[drive]` config points at a fresh temp dir, plus a
     /// seeded RDP session with drive enabled. Returns (manager, session id,
     /// drive dir).
-    async fn seeded_rdp_session() -> (Arc<SessionManager>, Uuid, std::path::PathBuf) {
-        let tmp = std::env::temp_dir().join(format!("persea-drive-api-test-{}", Uuid::new_v4()));
+    async fn seeded_rdp_session() -> (
+        tempfile::TempDir,
+        Arc<SessionManager>,
+        Uuid,
+        std::path::PathBuf,
+    ) {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let tmp_root = tmp.path().to_path_buf();
         let mut config = crate::config::Config::default();
-        config.recording_path = Some(tmp.join("recordings"));
+        config.recording_path = Some(tmp_root.join("recordings"));
         config.drive = Some(crate::config::DriveConfig {
             enabled: true,
-            drive_path: tmp.join("drives"),
+            drive_path: tmp_root.join("drives"),
             ..Default::default()
         });
         let manager: AppState = Arc::new(SessionManager::new(config, None));
@@ -1348,7 +1354,7 @@ mod drive_tests {
             "alice",
         )
         .await;
-        (manager, id, drive_dir)
+        (tmp, manager, id, drive_dir)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1412,7 +1418,7 @@ mod drive_tests {
 
     #[tokio::test]
     async fn drive_list_as_owner_returns_files() {
-        let (manager, id, dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, id, dir) = seeded_rdp_session().await;
         write_test_file(&dir, "notes.txt", b"hello drive");
         let res = drive_list_files(
             State(manager),
@@ -1430,7 +1436,7 @@ mod drive_tests {
 
     #[tokio::test]
     async fn drive_list_as_admin_allowed() {
-        let (manager, id, dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, id, dir) = seeded_rdp_session().await;
         write_test_file(&dir, "notes.txt", b"x");
         let res = drive_list_files(
             State(manager),
@@ -1444,7 +1450,7 @@ mod drive_tests {
 
     #[tokio::test]
     async fn drive_list_as_non_owner_is_403() {
-        let (manager, id, _dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, id, _dir) = seeded_rdp_session().await;
         let err = drive_list_files(
             State(manager),
             Path(id),
@@ -1457,7 +1463,7 @@ mod drive_tests {
 
     #[tokio::test]
     async fn drive_list_nonexistent_session_is_404() {
-        let (manager, _id, _dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, _id, _dir) = seeded_rdp_session().await;
         let err = drive_list_files(
             State(manager),
             Path(Uuid::new_v4()),
@@ -1474,7 +1480,7 @@ mod drive_tests {
 
     #[tokio::test]
     async fn drive_list_ssh_sftp_session_has_no_drive() {
-        let (manager, _id, _dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, _id, _dir) = seeded_rdp_session().await;
         let ssh_id = Uuid::new_v4();
         seed_session(&manager, ssh_id, SessionType::Ssh, true, None, "alice").await;
         let err = drive_list_files(
@@ -1489,7 +1495,7 @@ mod drive_tests {
 
     #[tokio::test]
     async fn drive_download_as_owner_streams_file() {
-        let (manager, id, dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, id, dir) = seeded_rdp_session().await;
         write_test_file(&dir, "report.pdf", b"PDFDATA");
         let res = drive_download_file(
             State(manager),
@@ -1515,7 +1521,7 @@ mod drive_tests {
 
     #[tokio::test]
     async fn drive_download_utf8_filename_header() {
-        let (manager, id, dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, id, dir) = seeded_rdp_session().await;
         write_test_file(&dir, "na\u{00ef}ve.txt", b"x");
         let res = drive_download_file(
             State(manager),
@@ -1541,7 +1547,7 @@ mod drive_tests {
 
     #[tokio::test]
     async fn drive_download_as_non_owner_is_403() {
-        let (manager, id, dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, id, dir) = seeded_rdp_session().await;
         write_test_file(&dir, "report.pdf", b"PDFDATA");
         let err = drive_download_file(
             State(manager),
@@ -1555,7 +1561,7 @@ mod drive_tests {
 
     #[tokio::test]
     async fn drive_download_nonexistent_session_is_404() {
-        let (manager, _id, _dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, _id, _dir) = seeded_rdp_session().await;
         let err = drive_download_file(
             State(manager),
             Path((Uuid::new_v4(), "report.pdf".into())),
@@ -1572,7 +1578,7 @@ mod drive_tests {
 
     #[tokio::test]
     async fn drive_download_missing_file_is_404() {
-        let (manager, id, _dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, id, _dir) = seeded_rdp_session().await;
         let err = drive_download_file(
             State(manager),
             Path((id, "ghost.txt".into())),
@@ -1585,7 +1591,7 @@ mod drive_tests {
 
     #[tokio::test]
     async fn drive_download_traversal_names_rejected() {
-        let (manager, id, dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, id, dir) = seeded_rdp_session().await;
         write_test_file(&dir, "real.txt", b"x");
         for name in ["../secrets", "a/b", "a\\b", "..", ".", ""] {
             let err = drive_download_file(
@@ -1606,7 +1612,7 @@ mod drive_tests {
 
     #[tokio::test]
     async fn drive_delete_as_owner_removes_file() {
-        let (manager, id, dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, id, dir) = seeded_rdp_session().await;
         write_test_file(&dir, "junk.bin", b"delete me");
         let identity = test_identity("alice", "viewer");
         assert_eq!(
@@ -1632,7 +1638,7 @@ mod drive_tests {
 
     #[tokio::test]
     async fn drive_delete_as_non_owner_is_403() {
-        let (manager, id, dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, id, dir) = seeded_rdp_session().await;
         write_test_file(&dir, "junk.bin", b"delete me");
         let err = drive_delete_file(
             State(manager),
@@ -1646,7 +1652,7 @@ mod drive_tests {
 
     #[tokio::test]
     async fn drive_delete_traversal_names_rejected() {
-        let (manager, id, _dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, id, _dir) = seeded_rdp_session().await;
         for name in ["../secrets", "a/b", "..", ""] {
             let err = drive_delete_file(
                 State(manager.clone()),
@@ -1666,7 +1672,7 @@ mod drive_tests {
 
     #[tokio::test]
     async fn drive_delete_nonexistent_session_is_404() {
-        let (manager, _id, _dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, _id, _dir) = seeded_rdp_session().await;
         let err = drive_delete_file(
             State(manager),
             Path((Uuid::new_v4(), "junk.bin".into())),
@@ -1683,7 +1689,7 @@ mod drive_tests {
 
     #[tokio::test]
     async fn drive_endpoints_need_authentication() {
-        let (manager, id, _dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, id, _dir) = seeded_rdp_session().await;
         let err = drive_list_files(State(manager.clone()), Path(id), None)
             .await
             .unwrap_err();
@@ -1717,7 +1723,7 @@ mod drive_tests {
 
     #[tokio::test]
     async fn drive_upload_creates_file_and_returns_entry() {
-        let (manager, id, dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, id, dir) = seeded_rdp_session().await;
         let payload = b"streamed upload body".to_vec();
         let (status, json) = upload(
             &manager,
@@ -1749,7 +1755,7 @@ mod drive_tests {
 
     #[tokio::test]
     async fn drive_upload_overwrites_existing_file() {
-        let (manager, id, dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, id, dir) = seeded_rdp_session().await;
         write_test_file(&dir, "notes.txt", b"old content");
         let payload = b"new".to_vec();
         let (status, json) = upload(
@@ -1768,7 +1774,7 @@ mod drive_tests {
 
     #[tokio::test]
     async fn drive_upload_as_admin_allowed() {
-        let (manager, id, _dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, id, _dir) = seeded_rdp_session().await;
         let (status, json) = upload(
             &manager,
             id,
@@ -1784,7 +1790,7 @@ mod drive_tests {
 
     #[tokio::test]
     async fn drive_upload_as_non_owner_is_403() {
-        let (manager, id, dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, id, dir) = seeded_rdp_session().await;
         let err = upload(
             &manager,
             id,
@@ -1800,7 +1806,7 @@ mod drive_tests {
 
     #[tokio::test]
     async fn drive_upload_without_identity_is_403() {
-        let (manager, id, dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, id, dir) = seeded_rdp_session().await;
         let err = upload(&manager, id, "anon.bin", None, b"x".to_vec())
             .await
             .unwrap_err();
@@ -1810,7 +1816,7 @@ mod drive_tests {
 
     #[tokio::test]
     async fn drive_upload_nonexistent_session_is_404() {
-        let (manager, _id, _dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, _id, _dir) = seeded_rdp_session().await;
         let err = upload(
             &manager,
             Uuid::new_v4(),
@@ -1829,7 +1835,7 @@ mod drive_tests {
 
     #[tokio::test]
     async fn drive_upload_traversal_names_rejected() {
-        let (manager, id, dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, id, dir) = seeded_rdp_session().await;
         for name in ["../secrets", "a/b", "a\\b", "..", ".", ""] {
             let err = upload(
                 &manager,
@@ -1853,7 +1859,7 @@ mod drive_tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn drive_upload_symlink_escape_refused() {
-        let (manager, id, dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, id, dir) = seeded_rdp_session().await;
         let outside = dir
             .parent()
             .unwrap()
@@ -1878,7 +1884,7 @@ mod drive_tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn drive_upload_symlink_inside_drive_dir_allowed() {
-        let (manager, id, dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, id, dir) = seeded_rdp_session().await;
         write_test_file(&dir, "real.txt", b"orig");
         std::os::unix::fs::symlink("real.txt", dir.join("alias.txt")).unwrap();
         let payload = b"via-alias".to_vec();
@@ -1903,7 +1909,7 @@ mod drive_tests {
 
     #[tokio::test]
     async fn drive_upload_to_directory_rejected() {
-        let (manager, id, dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, id, dir) = seeded_rdp_session().await;
         std::fs::create_dir(dir.join("subdir")).unwrap();
         let err = upload(
             &manager,
@@ -1919,7 +1925,7 @@ mod drive_tests {
 
     #[tokio::test]
     async fn drive_upload_ssh_session_has_no_drive() {
-        let (manager, _id, _dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, _id, _dir) = seeded_rdp_session().await;
         let ssh_id = Uuid::new_v4();
         seed_session(&manager, ssh_id, SessionType::Ssh, true, None, "alice").await;
         let err = upload(
@@ -1938,15 +1944,20 @@ mod drive_tests {
     /// were already mounted at `drive_path` (the mount itself is a
     /// startup-time root step, `drive::mount_luks`). Pins that upload
     /// resolution is identical on LUKS-configured drives.
-    async fn seeded_rdp_session_with_luks_config() -> (Arc<SessionManager>, Uuid, std::path::PathBuf)
-    {
-        let tmp = std::env::temp_dir().join(format!("persea-drive-api-test-{}", Uuid::new_v4()));
+    async fn seeded_rdp_session_with_luks_config() -> (
+        tempfile::TempDir,
+        Arc<SessionManager>,
+        Uuid,
+        std::path::PathBuf,
+    ) {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let tmp_root = tmp.path().to_path_buf();
         let mut config = crate::config::Config::default();
-        config.recording_path = Some(tmp.join("recordings"));
+        config.recording_path = Some(tmp_root.join("recordings"));
         config.drive = Some(crate::config::DriveConfig {
             enabled: true,
-            drive_path: tmp.join("drives"),
-            luks_device: Some(tmp.join("container.img")),
+            drive_path: tmp_root.join("drives"),
+            luks_device: Some(tmp_root.join("container.img")),
             luks_name: "persea-test".into(),
             luks_key_path: Some("secret/test".into()),
             ..Default::default()
@@ -1964,12 +1975,12 @@ mod drive_tests {
             "alice",
         )
         .await;
-        (manager, id, drive_dir)
+        (tmp, manager, id, drive_dir)
     }
 
     #[tokio::test]
     async fn drive_upload_luks_configured_drive_round_trip() {
-        let (manager, id, dir) = seeded_rdp_session_with_luks_config().await;
+        let (_tmp_dir, manager, id, dir) = seeded_rdp_session_with_luks_config().await;
         let payload = b"luks-encrypted payload".to_vec();
         let (status, json) = upload(
             &manager,
@@ -1987,7 +1998,7 @@ mod drive_tests {
 
     #[tokio::test]
     async fn drive_upload_concurrent_uploads_capped_per_session() {
-        let (manager, id, _dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, id, _dir) = seeded_rdp_session().await;
         let sem = drive_upload_semaphore(id);
         let mut held = Vec::new();
         for _ in 0..MAX_CONCURRENT_DRIVE_UPLOADS {
@@ -2016,8 +2027,8 @@ mod drive_tests {
 
     #[tokio::test]
     async fn stream_body_idle_timeout_aborts_upload() {
-        let dir = std::env::temp_dir().join(format!("persea-drive-idle-test-{}", Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let tmp_dir = tempfile::tempdir().expect("temp dir");
+        let dir = tmp_dir.path().to_path_buf();
         let mut file = tokio::fs::File::create(dir.join("idle.bin")).await.unwrap();
         // One chunk, then silence: the deadline must fire on the next
         // read even though the stream never ends.
@@ -2038,13 +2049,12 @@ mod drive_tests {
             "got {:?}",
             err
         );
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]
     async fn stream_body_cap_rejects_oversized_upload() {
-        let dir = std::env::temp_dir().join(format!("persea-drive-cap-test-{}", Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let tmp_dir = tempfile::tempdir().expect("temp dir");
+        let dir = tmp_dir.path().to_path_buf();
         let mut file = tokio::fs::File::create(dir.join("cap.bin")).await.unwrap();
         let err = stream_body_into_drive_file(
             axum::body::Body::from(b"0123456789".to_vec()),
@@ -2055,12 +2065,11 @@ mod drive_tests {
         .await
         .unwrap_err();
         assert!(matches!(err, AppError::Validation(_)), "got {:?}", err);
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]
     async fn drive_upload_stream_error_removes_partial_file_and_releases_permit() {
-        let (manager, id, dir) = seeded_rdp_session().await;
+        let (_tmp_dir, manager, id, dir) = seeded_rdp_session().await;
         let failing = futures_util::stream::iter(vec![
             Ok::<axum::body::Bytes, axum::Error>(axum::body::Bytes::from_static(b"partial data")),
             Err::<axum::body::Bytes, axum::Error>(axum::Error::new(std::io::Error::new(
@@ -2098,8 +2107,8 @@ mod drive_tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn verify_drive_file_fd_rejects_swapped_path() {
-        let dir = std::env::temp_dir().join(format!("persea-drive-verify-test-{}", Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let tmp_dir = tempfile::tempdir().expect("temp dir");
+        let dir = tmp_dir.path().to_path_buf();
         let a = dir.join("a.txt");
         let b = dir.join("b.txt");
         std::fs::write(&a, b"a").unwrap();
@@ -2110,7 +2119,6 @@ mod drive_tests {
         verify_drive_file_fd(&file, &b).await.unwrap_err();
         // A matching fd and path verify clean.
         verify_drive_file_fd(&file, &a).await.unwrap();
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]
@@ -2121,10 +2129,9 @@ mod drive_tests {
         let (token_id, plaintext) =
             db::create_user_token(&db, user.id, "ci-token", None, None).unwrap();
 
-        let tmp =
-            std::env::temp_dir().join(format!("persea-session-token-api-test-{}", Uuid::new_v4()));
+        let tmp_dir = tempfile::tempdir().expect("temp dir");
         let mut config = crate::config::Config::default();
-        config.recording_path = Some(tmp.join("recordings"));
+        config.recording_path = Some(tmp_dir.path().join("recordings"));
         let manager: AppState = Arc::new(SessionManager::new_with_db(config, None, db.clone()));
         let id = Uuid::new_v4();
         seed_session(

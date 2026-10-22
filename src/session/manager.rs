@@ -1846,8 +1846,9 @@ mod tests {
 
     fn test_manager() -> SessionManager {
         let mut config = Config::default();
-        let tmp = std::env::temp_dir().join(format!("persea-mgr-test-{}", uuid::Uuid::new_v4()));
-        config.recording_path = Some(tmp.clone());
+        // No test in this module writes recordings, so a per-test unique
+        // temp dir is enough; it is removed on drop.
+        let tmp = tempfile::tempdir().expect("temp dir").path().to_path_buf();
         config.xvnc_path = "/bin/true".into();
         config.chromium_path = "/bin/true".into();
         config.login_scripts_dir = "/tmp".into();
@@ -2137,7 +2138,7 @@ mod tests {
         let token = crate::db::create_auth_session(&db, user.id, 3600).unwrap();
 
         let mut config = Config::default();
-        let tmp = std::env::temp_dir().join(format!("persea-mgr-prune-{}", uuid::Uuid::new_v4()));
+        let tmp = tempfile::tempdir().expect("temp dir").path().to_path_buf();
         config.recording_path = Some(tmp.clone());
         let mgr = SessionManager::new_with_db(config, None, db.clone());
         mgr.store_session_credentials(&token, user.id, "alice", "enc:v1:abc".to_string(), 3600);

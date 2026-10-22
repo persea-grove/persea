@@ -1891,8 +1891,8 @@ mod tests {
     fn test_build_client_ca_cert_invalid_pem() {
         // reqwest::Certificate::from_pem rejects PEM with valid headers but
         // garbage DER content.
-        let dir = std::env::temp_dir().join("persea-test-vault-tls");
-        let _ = std::fs::create_dir_all(&dir);
+        let dir = tempfile::tempdir().expect("temp dir");
+        let dir = dir.path();
         let ca_path = dir.join("bad-ca.pem");
         let bad_pem =
             "-----BEGIN CERTIFICATE-----\nDEFINITELYnotvalid!!!\n-----END CERTIFICATE-----\n";
@@ -1902,14 +1902,12 @@ mod tests {
         config.ca_cert = Some(ca_path.to_str().unwrap().into());
         let result = build_vault_http_client(&config);
         assert!(result.is_err(), "expected error for invalid PEM");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn test_build_client_client_cert_without_key() {
-        let dir = std::env::temp_dir().join("persea-test-vault-tls-nokey");
-        let _ = std::fs::create_dir_all(&dir);
+        let dir = tempfile::tempdir().expect("temp dir");
+        let dir = dir.path();
         let cert_path = dir.join("client.pem");
         std::fs::write(&cert_path, b"placeholder").unwrap();
 
@@ -1919,8 +1917,6 @@ mod tests {
         let err = build_vault_http_client(&config).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("client_key is missing"), "got: {}", msg);
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1935,8 +1931,8 @@ mod tests {
 
     #[test]
     fn test_build_client_client_key_missing_file() {
-        let dir = std::env::temp_dir().join("persea-test-vault-tls-keyfile");
-        let _ = std::fs::create_dir_all(&dir);
+        let dir = tempfile::tempdir().expect("temp dir");
+        let dir = dir.path();
         let cert_path = dir.join("client.pem");
         std::fs::write(&cert_path, b"placeholder cert").unwrap();
 
@@ -1946,8 +1942,6 @@ mod tests {
         let err = build_vault_http_client(&config).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("failed to read client key"), "got: {}", msg);
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1976,8 +1970,8 @@ mod tests {
 
     #[test]
     fn test_build_client_valid_ca_cert() {
-        let dir = std::env::temp_dir().join("persea-test-vault-tls-valid");
-        let _ = std::fs::create_dir_all(&dir);
+        let dir = tempfile::tempdir().expect("temp dir");
+        let dir = dir.path();
         let ca_path = dir.join("ca.pem");
 
         // Generate a real self-signed cert via openssl
@@ -2007,8 +2001,6 @@ mod tests {
         config.ca_cert = Some(ca_path.to_str().unwrap().into());
         let result = build_vault_http_client(&config);
         assert!(result.is_ok(), "expected Ok, got: {:?}", result.err());
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -2088,8 +2080,8 @@ mod tests {
     #[test]
     fn test_build_client_mtls_pkcs8_key() {
         // This test reproduces issue #51: PKCS#8 keys from OpenBao should work.
-        let dir = std::env::temp_dir().join("persea-test-vault-mtls");
-        let _ = std::fs::create_dir_all(&dir);
+        let dir = tempfile::tempdir().expect("temp dir");
+        let dir = dir.path();
         let cert_path = dir.join("client.pem");
         let key_path = dir.join("client-key.pem");
 
@@ -2187,15 +2179,13 @@ mod tests {
             "mTLS with PKCS#8 key failed: {:?}",
             result.err()
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn test_build_client_mtls_fullchain_cert() {
         // Test with fullchain cert (leaf + CA) — as OpenBao typically delivers.
-        let dir = std::env::temp_dir().join("persea-test-vault-mtls-chain");
-        let _ = std::fs::create_dir_all(&dir);
+        let dir = tempfile::tempdir().expect("temp dir");
+        let dir = dir.path();
         let key_path = dir.join("client-key.pem");
         let fullchain_path = dir.join("client-fullchain.pem");
 
@@ -2291,8 +2281,6 @@ mod tests {
             "mTLS with fullchain cert failed: {:?}",
             result.err()
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

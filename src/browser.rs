@@ -901,9 +901,8 @@ mod tests {
 
     #[test]
     fn test_populate_login_data_noop() {
-        let dir = std::env::temp_dir().join("persea-test-login-data");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let tmp_guard = tempfile::tempdir().expect("temp dir");
+        let dir = tmp_guard.path().to_path_buf();
 
         let creds = vec![(
             "https://example.com".into(),
@@ -918,8 +917,6 @@ mod tests {
             !db_path.exists(),
             "Login Data SQLite should not be created for VDI sessions"
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1070,8 +1067,8 @@ mod tests {
         let chromium_pid = chromium_child.id().expect("chromium pid");
         let display = mgr.display_allocator.allocate().expect("display slot");
         let cdp = mgr.cdp_allocator.allocate().expect("cdp port") as u16;
-        let profile_dir =
-            std::env::temp_dir().join(format!("persea-test-profile-{}", uuid::Uuid::new_v4()));
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let profile_dir = tmp.path().join("profile");
         std::fs::create_dir_all(&profile_dir).unwrap();
 
         drop(BrowserSession {
@@ -1122,8 +1119,8 @@ mod tests {
         let (xvnc_child, chromium_child) = make_test_browsers();
         let display = mgr.display_allocator.allocate().expect("display slot");
         let cdp = mgr.cdp_allocator.allocate().expect("cdp port") as u16;
-        let profile_dir =
-            std::env::temp_dir().join(format!("persea-test-profile-{}", uuid::Uuid::new_v4()));
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let profile_dir = tmp.path().join("profile");
         std::fs::create_dir_all(&profile_dir).unwrap();
 
         let mut session = BrowserSession {

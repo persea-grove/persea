@@ -860,8 +860,6 @@ mod tests {
 
     // ── check_server_key fail-closed matrix ─────────────────────────────
 
-    use std::sync::atomic::{AtomicU64, Ordering};
-
     /// The SHA-256 fingerprint of [`test_server_key`] (same bytes as the
     /// OpenSSH key accepted by the `normalize_host_key` tests).
     const TEST_KEY_FP: &str = "SHA256:ldyiXa1JQakitNU5tErauu8DvWQ1dZ7aXu+rm7KQuog";
@@ -874,16 +872,18 @@ mod tests {
         .into()
     }
 
-    /// Unique temp path so parallel tests never share a known_hosts file.
-    fn scratch_path(tag: &str) -> PathBuf {
-        static SEQ: AtomicU64 = AtomicU64::new(0);
-        let n = SEQ.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!("persea-tunnel-{}-{}-{tag}", std::process::id(), n))
+    /// Unique temp directory so parallel tests never share a known_hosts
+    /// file. The test holds the returned TempDir so the dir survives until
+    /// the test ends and is removed on drop.
+    fn scratch_dir(tag: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join(format!("known_hosts-{tag}"));
+        (dir, path)
     }
 
     #[tokio::test]
     async fn check_server_key_pins_first_use_and_accepts() {
-        let path = scratch_path("tofu");
+        let (_scratch, path) = scratch_dir("tofu");
         let mut handler = TunnelHandler {
             expected_key: None,
             hop_index: 0,
@@ -895,14 +895,14 @@ mod tests {
         // The pin must be durably recorded for the next connection.
         let pinned = std::fs::read_to_string(&path).unwrap();
         assert_eq!(pinned, format!("test.host:22:{TEST_KEY_FP}\n"));
-        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
     async fn check_server_key_fails_closed_when_pin_unrecordable() {
         // A directory cannot be opened for append, so the TOFU pin write
         // fails: the connection must be refused, not accepted on trust.
-        let dir = scratch_path("unrecordable");
+        let (scratch, dir) = scratch_dir("unrecordable-dir");
+        let dir = scratch.path().join(dir.file_name().unwrap());
         std::fs::create_dir(&dir).unwrap();
         let mut handler = TunnelHandler {
             expected_key: None,
@@ -912,7 +912,6 @@ mod tests {
         };
         let key = test_server_key();
         assert!(!handler.check_server_key(&key).await.unwrap());
-        let _ = std::fs::remove_dir(&dir);
     }
 
     #[tokio::test]
@@ -955,7 +954,7 @@ mod tests {
     async fn check_server_key_verifies_known_hosts_entry() {
         // Already pinned in known_hosts (no address-book key): verify, and
         // the pin file must not be rewritten.
-        let path = scratch_path("known-entry");
+        let (_scratch, path) = scratch_dir("known-entry");
         std::fs::write(&path, format!("test.host:22:{TEST_KEY_FP}\n")).unwrap();
         let mut handler = TunnelHandler {
             expected_key: None,

@@ -1115,7 +1115,6 @@ mod tests {
     use axum::http::Request;
     use axum::routing::get;
     use axum::Router;
-    use std::path::PathBuf;
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -1125,11 +1124,11 @@ mod tests {
         crypto::EncryptionKey::from_hex(TEST_KEY_HEX).unwrap()
     }
 
-    fn temp_dir(tag: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("persea-reptest-{tag}-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    /// Unique temp fixture directory, removed on drop (even on panic). The
+    /// tag is documentation-only now that each dir is uniquely named.
+    fn temp_dir(tag: &str) -> tempfile::TempDir {
+        let _ = tag;
+        tempfile::tempdir().unwrap()
     }
 
     fn random_bytes(len: usize) -> Vec<u8> {
@@ -1189,12 +1188,12 @@ mod tests {
         ] {
             let plaintext = random_bytes(size);
             let encrypted = crypto::encrypt_bytes(&test_key(), &plaintext).unwrap();
-            let dir = temp_dir("stream-match");
+            let tmp_guard = temp_dir("stream-match");
+            let dir = tmp_guard.path().to_path_buf();
             let path = dir.join("s.guac.enc");
             std::fs::write(&path, &encrypted).unwrap();
             let got = decrypt_to_vec(&path, TEST_KEY_HEX).unwrap();
             assert_eq!(got, plaintext, "size {size}");
-            std::fs::remove_dir_all(&dir).ok();
         }
     }
 
@@ -1202,13 +1201,13 @@ mod tests {
     fn stream_decrypt_rejects_wrong_key() {
         let plaintext = random_bytes(4096);
         let encrypted = crypto::encrypt_bytes(&test_key(), &plaintext).unwrap();
-        let dir = temp_dir("stream-wrong-key");
+        let tmp_guard = temp_dir("stream-wrong-key");
+        let dir = tmp_guard.path().to_path_buf();
         let path = dir.join("s.guac.enc");
         std::fs::write(&path, &encrypted).unwrap();
         let wrong_key = "02".repeat(32);
         let err = decrypt_to_vec(&path, &wrong_key).unwrap_err();
         assert!(err.contains("tag mismatch"), "unexpected error: {err}");
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -1218,12 +1217,12 @@ mod tests {
         // Flip one bit in the middle of the ciphertext body.
         let mid = encrypted.len() / 2;
         encrypted[mid] ^= 0x01;
-        let dir = temp_dir("stream-tamper");
+        let tmp_guard = temp_dir("stream-tamper");
+        let dir = tmp_guard.path().to_path_buf();
         let path = dir.join("s.guac.enc");
         std::fs::write(&path, &encrypted).unwrap();
         let err = decrypt_to_vec(&path, TEST_KEY_HEX).unwrap_err();
         assert!(err.contains("tag mismatch"), "unexpected error: {err}");
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -1234,7 +1233,8 @@ mod tests {
         // Flip one bit in the middle of the ciphertext body.
         let mid = encrypted.len() / 2;
         encrypted[mid] ^= 0x01;
-        let dir = temp_dir("stream-no-emit");
+        let tmp_guard = temp_dir("stream-no-emit");
+        let dir = tmp_guard.path().to_path_buf();
         let path = dir.join("s.guac.enc");
         std::fs::write(&path, &encrypted).unwrap();
 
@@ -1249,7 +1249,6 @@ mod tests {
             "no plaintext may be released before the tag verifies"
         );
         assert!(err.contains("tag mismatch"), "unexpected error: {err}");
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -1257,7 +1256,8 @@ mod tests {
         let plaintext = random_bytes((STREAM_DECRYPT_THRESHOLD + 1) as usize);
         let mut encrypted = crypto::encrypt_bytes(&test_key(), &plaintext).unwrap();
         encrypted.truncate(encrypted.len() - 20);
-        let dir = temp_dir("stream-no-emit-trunc");
+        let tmp_guard = temp_dir("stream-no-emit-trunc");
+        let dir = tmp_guard.path().to_path_buf();
         let path = dir.join("s.guac.enc");
         std::fs::write(&path, &encrypted).unwrap();
 
@@ -1275,12 +1275,12 @@ mod tests {
             err.contains("tag mismatch") || err.contains("unexpected end of recording"),
             "unexpected error: {err}"
         );
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn stream_decrypt_rejects_truncated_and_empty_files() {
-        let dir = temp_dir("stream-truncated");
+        let tmp_guard = temp_dir("stream-truncated");
+        let dir = tmp_guard.path().to_path_buf();
         let empty = dir.join("empty.guac.enc");
         std::fs::write(&empty, b"").unwrap();
         assert!(decrypt_to_vec(&empty, TEST_KEY_HEX).is_err());
@@ -1299,16 +1299,15 @@ mod tests {
             err.contains("tag mismatch") || err.contains("unexpected end of recording"),
             "unexpected error: {err}"
         );
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn stream_decrypt_rejects_invalid_key_hex() {
-        let dir = temp_dir("stream-bad-hex");
+        let tmp_guard = temp_dir("stream-bad-hex");
+        let dir = tmp_guard.path().to_path_buf();
         let path = dir.join("s.guac.enc");
         std::fs::write(&path, vec![0u8; 64]).unwrap();
         assert!(decrypt_to_vec(&path, "not-hex").is_err());
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     // ── Endpoint scoping (poweruser sees own sessions/recordings) ──
@@ -1364,7 +1363,8 @@ mod tests {
 
     #[tokio::test]
     async fn list_recordings_poweruser_sees_only_own() {
-        let dir = temp_dir("list-scope");
+        let tmp_guard = temp_dir("list-scope");
+        let dir = tmp_guard.path().to_path_buf();
         std::fs::write(dir.join("mine.guac"), b"mine").unwrap();
         write_meta(&dir.join("mine.guac"), &meta("Alice")).unwrap();
         std::fs::write(dir.join("theirs.guac"), b"theirs").unwrap();
@@ -1394,12 +1394,12 @@ mod tests {
             .map(|r| r["name"].as_str().unwrap())
             .collect();
         assert_eq!(names.len(), 3, "admin sees everything: {names:?}");
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]
     async fn serve_recording_poweruser_cannot_play_other_users_recording() {
-        let dir = temp_dir("serve-scope");
+        let tmp_guard = temp_dir("serve-scope");
+        let dir = tmp_guard.path().to_path_buf();
         std::fs::write(dir.join("mine.guac"), b"4.3\nsize 1,1\n").unwrap();
         write_meta(&dir.join("mine.guac"), &meta("Alice")).unwrap();
         std::fs::write(dir.join("theirs.guac"), b"4.3\nsize 2,2\n").unwrap();
@@ -1436,12 +1436,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]
     async fn serve_encrypted_recording_streams_large_files() {
-        let dir = temp_dir("serve-stream");
+        let tmp_guard = temp_dir("serve-stream");
+        let dir = tmp_guard.path().to_path_buf();
         // Just above the whole-buffer threshold: forces the streaming path.
         let plaintext = random_bytes((STREAM_DECRYPT_THRESHOLD + 1) as usize);
         let src = dir.join("big.guac");
@@ -1458,12 +1458,12 @@ mod tests {
         let got = body_bytes(resp).await;
         assert_eq!(got.len(), plaintext.len());
         assert_eq!(got, plaintext);
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]
     async fn serve_corrupt_encrypted_recording_aborts_without_plaintext() {
-        let dir = temp_dir("serve-corrupt");
+        let tmp_guard = temp_dir("serve-corrupt");
+        let dir = tmp_guard.path().to_path_buf();
         // Above the whole-buffer threshold: forces the streaming path.
         let plaintext = random_bytes((STREAM_DECRYPT_THRESHOLD + 1) as usize);
         let src = dir.join("big.guac");
@@ -1493,7 +1493,6 @@ mod tests {
             err.to_string().contains("tag mismatch"),
             "unexpected error: {err}"
         );
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     fn reports_router(db: Db, id: AuthIdentity) -> Router {

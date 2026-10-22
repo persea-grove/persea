@@ -231,8 +231,8 @@ async fn full_stack_login_via_http() {
     };
 
     let marker = format!("ldap-it-{}", std::process::id());
-    let tmp = std::env::temp_dir().join(&marker);
-    std::fs::create_dir_all(&tmp).expect("create scratch dir");
+    let tmp_guard = tempfile::tempdir().expect("create scratch dir");
+    let tmp = tmp_guard.path();
     let config_path = tmp.join("config.toml");
     let log_path = tmp.join("persea.log");
     let db_path = tmp.join("admin.db").display().to_string();
@@ -434,7 +434,6 @@ async fn full_stack_login_via_http() {
     );
 
     terminate(&mut app);
-    std::fs::remove_dir_all(&tmp).ok();
     eprintln!("full-stack LDAP login: PASSED");
 }
 
@@ -451,8 +450,8 @@ async fn ldap_login_with_real_email_account_gets_session_redirect() {
     };
 
     let marker = format!("ldap-it-{}-lookup", std::process::id());
-    let tmp = std::env::temp_dir().join(&marker);
-    std::fs::create_dir_all(&tmp).expect("create scratch dir");
+    let tmp_guard = tempfile::tempdir().expect("create scratch dir");
+    let tmp = tmp_guard.path();
     let config_path = tmp.join("config.toml");
     let log_path = tmp.join("persea.log");
     let db_path = tmp.join("admin.db").display().to_string();
@@ -556,7 +555,6 @@ async fn ldap_login_with_real_email_account_gets_session_redirect() {
     );
 
     terminate(&mut app);
-    std::fs::remove_dir_all(&tmp).ok();
     eprintln!("LDAP real-email login (chain lookup): PASSED");
 }
 

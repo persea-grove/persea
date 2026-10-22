@@ -6228,8 +6228,14 @@ mod tests {
     /// whose recording dir lives in the system temp dir.
     fn session_credentials_manager(gate_on: bool) -> AppState {
         let mut config = crate::config::Config::default();
+        // Recordings are never written here; a dropped unique temp dir
+        // path keeps the config pointing somewhere private without
+        // creating (and then) leaking a per-test directory.
         config.recording = Some(crate::config::RecordingConfig {
-            path: std::env::temp_dir().join(format!("persea-ab-{}", uuid::Uuid::new_v4())),
+            path: tempfile::tempdir()
+                .expect("temp dir")
+                .path()
+                .join("recordings"),
             ..Default::default()
         });
         config.auth = Some(crate::config::AuthConfig {
@@ -6617,8 +6623,14 @@ mod tests {
     /// an unreachable port).
     fn session_credentials_manager_with_guacd(gate_on: bool, guacd_addr: &str) -> AppState {
         let mut config = crate::config::Config::default();
+        // Recordings are never written here; a dropped unique temp dir
+        // path keeps the config pointing somewhere private without
+        // creating (and then) leaking a per-test directory.
         config.recording = Some(crate::config::RecordingConfig {
-            path: std::env::temp_dir().join(format!("persea-ab-{}", uuid::Uuid::new_v4())),
+            path: tempfile::tempdir()
+                .expect("temp dir")
+                .path()
+                .join("recordings"),
             ..Default::default()
         });
         config.auth = Some(crate::config::AuthConfig {

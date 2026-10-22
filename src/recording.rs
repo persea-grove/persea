@@ -395,10 +395,9 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn temp_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("persea_test_{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&dir).unwrap();
-        dir
+    /// Unique temp fixture directory, removed on drop (even on panic).
+    fn temp_dir() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
     }
 
     #[test]
@@ -466,10 +465,10 @@ mod tests {
 
     #[test]
     fn list_recordings_by_age_empty_dir() {
-        let dir = temp_dir();
+        let tmp_guard = temp_dir();
+        let dir = tmp_guard.path().to_path_buf();
         let result = list_recordings_by_age(&dir);
         assert!(result.is_empty());
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -480,7 +479,8 @@ mod tests {
 
     #[test]
     fn list_recordings_by_age_filters_non_guac() {
-        let dir = temp_dir();
+        let tmp_guard = temp_dir();
+        let dir = tmp_guard.path().to_path_buf();
         fs::write(dir.join("test.txt"), "not a recording").unwrap();
         fs::write(dir.join("session.guac"), "fake guac").unwrap();
         fs::write(dir.join("another.log"), "log file").unwrap();
@@ -488,12 +488,12 @@ mod tests {
         let result = list_recordings_by_age(&dir);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].0.file_name().unwrap(), "session.guac");
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn list_recordings_by_age_sorted_oldest_first() {
-        let dir = temp_dir();
+        let tmp_guard = temp_dir();
+        let dir = tmp_guard.path().to_path_buf();
         // Create files with different names (OS will set mtime to creation time)
         fs::write(dir.join("c.guac"), "c").unwrap();
         fs::write(dir.join("a.guac"), "a").unwrap();
@@ -509,12 +509,12 @@ mod tests {
         for i in 1..result.len() {
             assert!(result[i - 1].1 <= result[i].1);
         }
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn write_and_read_meta() {
-        let dir = temp_dir();
+        let tmp_guard = temp_dir();
+        let dir = tmp_guard.path().to_path_buf();
         let guac_path = dir.join("test.guac");
         fs::write(&guac_path, "fake data").unwrap();
 
@@ -536,8 +536,6 @@ mod tests {
         assert_eq!(read.created_at, "2025-06-01T12:00:00Z");
         assert_eq!(read.user.as_deref(), Some("test@example.com"));
         assert_eq!(read.session_type.as_deref(), Some("ssh"));
-
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -548,7 +546,8 @@ mod tests {
 
     #[test]
     fn read_meta_invalid_json() {
-        let dir = temp_dir();
+        let tmp_guard = temp_dir();
+        let dir = tmp_guard.path().to_path_buf();
         let guac_path = dir.join("bad.guac");
         fs::write(&guac_path, "").unwrap();
         let meta_path = guac_path.with_extension("meta");
@@ -556,12 +555,12 @@ mod tests {
 
         let result = read_meta(&guac_path);
         assert!(result.is_none());
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn rotate_zero_max_recordings_is_noop() {
-        let dir = temp_dir();
+        let tmp_guard = temp_dir();
+        let dir = tmp_guard.path().to_path_buf();
         fs::write(dir.join("test.guac"), "data").unwrap();
 
         let config = RecordingConfig {
@@ -573,12 +572,12 @@ mod tests {
         let deleted = rotate(&config);
         assert_eq!(deleted, 0);
         assert!(dir.join("test.guac").exists());
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn rotate_enforces_max_recordings() {
-        let dir = temp_dir();
+        let tmp_guard = temp_dir();
+        let dir = tmp_guard.path().to_path_buf();
         for i in 0..5 {
             fs::write(dir.join(format!("{}.guac", i)), "data").unwrap();
         }
@@ -593,12 +592,12 @@ mod tests {
         assert_eq!(deleted, 2);
         let remaining = list_recordings_by_age(&dir);
         assert_eq!(remaining.len(), 3);
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn rotate_no_op_when_under_limit() {
-        let dir = temp_dir();
+        let tmp_guard = temp_dir();
+        let dir = tmp_guard.path().to_path_buf();
         for i in 0..3 {
             fs::write(dir.join(format!("{}.guac", i)), "data").unwrap();
         }
@@ -612,32 +611,32 @@ mod tests {
         let deleted = rotate(&config);
         assert_eq!(deleted, 0);
         assert_eq!(list_recordings_by_age(&dir).len(), 3);
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn rotate_per_entry_zero_max_is_noop() {
-        let dir = temp_dir();
+        let tmp_guard = temp_dir();
+        let dir = tmp_guard.path().to_path_buf();
         fs::write(dir.join("test.guac"), "data").unwrap();
 
         let deleted = rotate_per_entry(&dir, "entry/key", 0);
         assert_eq!(deleted, 0);
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn rotate_per_entry_no_matching_metas() {
-        let dir = temp_dir();
+        let tmp_guard = temp_dir();
+        let dir = tmp_guard.path().to_path_buf();
         fs::write(dir.join("test.guac"), "data").unwrap();
         // No .meta file, so nothing matches
         let deleted = rotate_per_entry(&dir, "entry/key", 1);
         assert_eq!(deleted, 0);
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn rotate_per_entry_matches_and_deletes_oldest() {
-        let dir = temp_dir();
+        let tmp_guard = temp_dir();
+        let dir = tmp_guard.path().to_path_buf();
         // Create 3 recordings all for the same entry
         for i in 0..3 {
             let guac_path = dir.join(format!("{}.guac", i));
@@ -665,12 +664,12 @@ mod tests {
             })
             .collect();
         assert_eq!(remaining.len(), 2);
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn rotate_per_entry_ignores_other_entries() {
-        let dir = temp_dir();
+        let tmp_guard = temp_dir();
+        let dir = tmp_guard.path().to_path_buf();
         // Create recordings for different entries
         for (i, entry) in ["other/entry", "target/entry", "other/entry"]
             .iter()
@@ -691,7 +690,6 @@ mod tests {
 
         let deleted = rotate_per_entry(&dir, "target/entry", 1);
         assert_eq!(deleted, 0); // only 1 match, at limit
-        fs::remove_dir_all(&dir).ok();
     }
 
     // ── Reconnect-aware recording open (owner reconnect) ──
@@ -702,18 +700,19 @@ mod tests {
 
     #[test]
     fn recording_open_mode_fresh_connection_creates() {
-        let dir = temp_dir();
+        let tmp_guard = temp_dir();
+        let dir = tmp_guard.path().to_path_buf();
         let guac_path = dir.join("fresh.guac");
         assert_eq!(
             recording_open_mode(&guac_path, Some(&test_key_hex())),
             RecordingOpen::Create
         );
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn recording_open_mode_existing_plaintext_appends() {
-        let dir = temp_dir();
+        let tmp_guard = temp_dir();
+        let dir = tmp_guard.path().to_path_buf();
         let guac_path = dir.join("plain.guac");
         fs::write(&guac_path, b"segment1").unwrap();
         // Reconnect with encryption off (or on): the plaintext segment is
@@ -723,12 +722,12 @@ mod tests {
             recording_open_mode(&guac_path, Some(&test_key_hex())),
             RecordingOpen::Append
         );
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn recording_open_mode_encrypted_segment_restored_never_truncated() {
-        let dir = temp_dir();
+        let tmp_guard = temp_dir();
+        let dir = tmp_guard.path().to_path_buf();
         let guac_path = dir.join("sess.guac");
         fs::write(&guac_path, b"segment1").unwrap();
         // First teardown: encrypt at rest (.guac to .guac.enc).
@@ -747,12 +746,12 @@ mod tests {
             guac_path.with_extension("guac.enc").exists(),
             "recording_open_mode must never truncate the .guac.enc"
         );
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn recording_open_mode_encrypted_segment_without_key_unavailable() {
-        let dir = temp_dir();
+        let tmp_guard = temp_dir();
+        let dir = tmp_guard.path().to_path_buf();
         let guac_path = dir.join("sess.guac");
         fs::write(&guac_path, b"segment1").unwrap();
         let key = test_key_hex();
@@ -766,12 +765,12 @@ mod tests {
             RecordingOpen::Unavailable
         );
         assert!(guac_path.with_extension("guac.enc").exists());
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn recording_open_mode_encrypted_segment_wrong_key_unavailable() {
-        let dir = temp_dir();
+        let tmp_guard = temp_dir();
+        let dir = tmp_guard.path().to_path_buf();
         let guac_path = dir.join("sess.guac");
         fs::write(&guac_path, b"segment1").unwrap();
         encrypt_recording_file(&guac_path, &test_key_hex()).unwrap();
@@ -782,6 +781,5 @@ mod tests {
             RecordingOpen::Unavailable
         );
         assert!(guac_path.with_extension("guac.enc").exists());
-        fs::remove_dir_all(&dir).ok();
     }
 }

@@ -12,9 +12,6 @@ use persea::config::{
 };
 use persea::db::{self, Db};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn test_db() -> Db {
     db::init_db(Path::new(":memory:")).unwrap()
@@ -25,14 +22,12 @@ fn path_str(p: &Path) -> &str {
 }
 
 /// Scratch directory, unique per call so parallel tests never collide.
-fn scratch_dir(tag: &str) -> std::path::PathBuf {
-    let n = DIR_SEQ.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!(
-        "persea-storage-key-{tag}-{}-{n}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+fn scratch_dir(tag: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    // Unique dir, removed on drop (even on panic).
+    let tmp = tempfile::tempdir().expect("create scratch dir");
+    let dir = tmp.path().to_path_buf();
+    let _ = tag;
+    (tmp, dir)
 }
 
 /// CI sets PERSEA_STORAGE_KEY; pin the env to "unset" for the duration so
@@ -63,7 +58,7 @@ fn insert_credential(db: &Db) {
 #[test]
 fn fresh_store_generates_and_persists_key() {
     without_env_key();
-    let dir = scratch_dir("fresh");
+    let (_tmp, dir) = scratch_dir("fresh");
     let cfg_path = dir.join("config.toml");
     std::fs::write(&cfg_path, "listen_addr = \"127.0.0.1:8089\"\n").unwrap();
 
@@ -93,7 +88,7 @@ fn fresh_store_generates_and_persists_key() {
 #[test]
 fn existing_storage_section_is_filled_in() {
     without_env_key();
-    let dir = scratch_dir("fill");
+    let (_tmp, dir) = scratch_dir("fill");
     let cfg_path = dir.join("config.toml");
     std::fs::write(
         &cfg_path,
@@ -133,7 +128,7 @@ fn existing_storage_section_is_filled_in() {
 #[test]
 fn store_with_credentials_refuses() {
     without_env_key();
-    let dir = scratch_dir("creds");
+    let (_tmp, dir) = scratch_dir("creds");
     let cfg_path = dir.join("config.toml");
     let original = "listen_addr = \"127.0.0.1:8089\"\n";
     std::fs::write(&cfg_path, original).unwrap();
@@ -152,7 +147,7 @@ fn store_with_credentials_refuses() {
 #[test]
 fn unwritable_config_refuses() {
     without_env_key();
-    let dir = scratch_dir("unwritable");
+    let (_tmp, dir) = scratch_dir("unwritable");
     // A path inside a directory that does not exist cannot be written.
     let missing = dir.join("no-such-dir").join("config.toml");
 
@@ -166,7 +161,7 @@ fn unwritable_config_refuses() {
 #[test]
 fn configured_key_is_left_alone() {
     without_env_key();
-    let dir = scratch_dir("existing");
+    let (_tmp, dir) = scratch_dir("existing");
     let cfg_path = dir.join("config.toml");
     let key = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
     let original = format!(
@@ -188,7 +183,7 @@ fn configured_key_is_left_alone() {
 #[test]
 fn empty_key_in_file_is_replaced() {
     without_env_key();
-    let dir = scratch_dir("empty-key");
+    let (_tmp, dir) = scratch_dir("empty-key");
     let cfg_path = dir.join("config.toml");
     std::fs::write(
         &cfg_path,
@@ -221,7 +216,7 @@ fn empty_key_in_file_is_replaced() {
 #[test]
 fn vault_backend_skips_generation() {
     without_env_key();
-    let dir = scratch_dir("vault");
+    let (_tmp, dir) = scratch_dir("vault");
     let cfg_path = dir.join("config.toml");
     let original = "[storage]\nbackend = \"vault\"\n";
     std::fs::write(&cfg_path, original).unwrap();
@@ -250,7 +245,7 @@ fn generated_key_is_random_64_hex() {
 
 #[test]
 fn persist_creates_file_and_section_when_absent() {
-    let dir = scratch_dir("persist");
+    let (_tmp, dir) = scratch_dir("persist");
     let cfg_path = dir.join("config.toml");
     let key = generate_encryption_key();
     persist_storage_encryption_key(&path_str(&cfg_path), &key).unwrap();
@@ -268,7 +263,7 @@ fn persist_creates_file_and_section_when_absent() {
 #[test]
 fn indented_key_is_seen_and_preserved_exactly_once() {
     without_env_key();
-    let dir = scratch_dir("indented");
+    let (_tmp, dir) = scratch_dir("indented");
     let cfg_path = dir.join("config.toml");
     let key = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
     let original = format!(
@@ -301,7 +296,7 @@ fn indented_key_is_seen_and_preserved_exactly_once() {
 #[test]
 fn ensure_preserves_existing_key_byte_for_byte() {
     without_env_key();
-    let dir = scratch_dir("preserve");
+    let (_tmp, dir) = scratch_dir("preserve");
     let cfg_path = dir.join("config.toml");
     let key = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
     let original = format!("[storage]\nencryption_key = \"{}\"\n", key);
@@ -324,13 +319,13 @@ fn written_config_is_owner_only() {
     use std::os::unix::fs::PermissionsExt;
     without_env_key();
 
-    let dir = scratch_dir("mode-fresh");
+    let (_tmp, dir) = scratch_dir("mode-fresh");
     let cfg_path = dir.join("config.toml");
     ensure_storage_encryption_key(path_str(&cfg_path)).unwrap();
     let mode = std::fs::metadata(&cfg_path).unwrap().permissions().mode();
     assert_eq!(mode & 0o777, 0o600);
 
-    let dir = scratch_dir("mode-rewrite");
+    let (_tmp, dir) = scratch_dir("mode-rewrite");
     let cfg_path = dir.join("config.toml");
     std::fs::write(&cfg_path, "listen_addr = \"127.0.0.1:8089\"\n").unwrap();
     std::fs::set_permissions(&cfg_path, std::fs::Permissions::from_mode(0o644)).unwrap();
@@ -345,7 +340,7 @@ fn written_config_is_owner_only() {
 #[test]
 fn duplicate_keys_left_by_old_installers_are_repaired() {
     without_env_key();
-    let dir = scratch_dir("dedupe");
+    let (_tmp, dir) = scratch_dir("dedupe");
     let cfg_path = dir.join("config.toml");
     std::fs::write(
         &cfg_path,
@@ -371,7 +366,7 @@ fn duplicate_keys_left_by_old_installers_are_repaired() {
 #[test]
 fn empty_key_is_replaced_with_a_generated_one() {
     without_env_key();
-    let dir = scratch_dir("ensure-empty");
+    let (_tmp, dir) = scratch_dir("ensure-empty");
     let cfg_path = dir.join("config.toml");
     std::fs::write(
         &cfg_path,
@@ -396,7 +391,7 @@ fn empty_key_is_replaced_with_a_generated_one() {
 #[test]
 fn inline_storage_table_fails_closed_without_corruption() {
     without_env_key();
-    let dir = scratch_dir("inline");
+    let (_tmp, dir) = scratch_dir("inline");
     let cfg_path = dir.join("config.toml");
     let original = "storage = { backend = \"db\" }\nlisten_addr = \"127.0.0.1:8089\"\n";
     std::fs::write(&cfg_path, &original).unwrap();
@@ -411,7 +406,7 @@ fn inline_storage_table_fails_closed_without_corruption() {
 /// admin-set key survives the wizard's full-file rewrite.
 #[test]
 fn storage_section_preserves_existing_section() {
-    let dir = scratch_dir("section");
+    let (_tmp, dir) = scratch_dir("section");
     let cfg_path = dir.join("config.toml");
     let key = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
     std::fs::write(
@@ -434,7 +429,7 @@ fn storage_section_preserves_existing_section() {
 /// with a new key.
 #[test]
 fn storage_section_generated_when_absent() {
-    let dir = scratch_dir("section-none");
+    let (_tmp, dir) = scratch_dir("section-none");
     let cfg_path = dir.join("config.toml");
     std::fs::write(&cfg_path, "listen_addr = \"127.0.0.1:8089\"\n").unwrap();
 
@@ -456,7 +451,7 @@ fn storage_section_generated_when_absent() {
 #[test]
 fn cli_subcommand_ensures_key_without_touching_the_db() {
     without_env_key();
-    let dir = scratch_dir("cli");
+    let (_tmp, dir) = scratch_dir("cli");
     let cfg_path = dir.join("config.toml");
     std::fs::write(&cfg_path, "listen_addr = \"127.0.0.1:8089\"\n").unwrap();
 
