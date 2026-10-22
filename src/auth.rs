@@ -512,6 +512,14 @@ impl AuthIdentity {
         }
     }
 
+    /// Email address for a user identity. API key identities have none.
+    pub fn email(&self) -> Option<&str> {
+        match self {
+            AuthIdentity::User { email, .. } => Some(email),
+            AuthIdentity::ApiKey(_) => None,
+        }
+    }
+
     /// Effective role name; API key identities always resolve to admin.
     pub fn role(&self) -> &str {
         match self {
