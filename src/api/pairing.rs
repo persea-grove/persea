@@ -22,7 +22,6 @@
 
 use crate::auth::{client_ip, AuthIdentity, TrustedProxies};
 use crate::db::{self, Db};
-use crate::db_pool::DbPool;
 use crate::error::AppError;
 use axum::{
     extract::{ConnectInfo, Query},
@@ -230,14 +229,6 @@ fn is_expired(expires_at: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
     }
 }
 
-fn db_err(e: &sqlx::Error) -> AppError {
-    AppError::Internal(format!("database error: {e}"))
-}
-
-fn no_pool_err() -> AppError {
-    AppError::Internal("no active database pool configured".into())
-}
-
 // ── Storage ─────────────────────────────────────────────────────────────
 
 /// A pending pairing record as stored.
@@ -309,8 +300,13 @@ pub async fn insert_pairing(
 
 /// Look up a pairing record by code hash.
 pub async fn lookup_pairing(db: &Db, code_hash: String) -> Result<Option<PairingRow>, AppError> {
-    if let Some(pool) = db::active_pool() {
-        return pool_lookup_pairing(pool, &code_hash).await;
+    // Route through the dedicated db worker runtime (persea#322): the pool
+    // query must not be awaited on the axum runtime (sqlx cross-runtime
+    // acquire race). `Some(res)` is the pool store's answer — including a
+    // not-found `Ok(None)` — and `None` means no pool store is active, so
+    // the legacy SQLite path below runs. Pool-store errors propagate.
+    if let Some(res) = db::lookup_active_pairing(&code_hash) {
+        return res.map_err(AppError::from);
     }
     let db = db.clone();
     let result: rusqlite::Result<Option<PairingRow>> =
@@ -346,8 +342,10 @@ pub async fn bind_pairing(
     user_id: i64,
     now_db: String,
 ) -> Result<bool, AppError> {
-    if let Some(pool) = db::active_pool() {
-        return pool_bind_pairing(pool, &code_hash, user_id, &now_db).await;
+    // Worker-routed like the other pairing stores (persea#322); `None`
+    // falls back to the legacy SQLite path below, errors propagate.
+    if let Some(res) = db::bind_active_pairing(&code_hash, user_id, &now_db) {
+        return res.map_err(AppError::from);
     }
     let db = db.clone();
     let result: rusqlite::Result<bool> =
@@ -369,8 +367,10 @@ pub async fn bind_pairing(
 /// Claim an approved pairing so the token plaintext is handed out exactly
 /// once. Returns `false` when another poll already claimed it.
 pub async fn claim_pairing(db: &Db, code_hash: String, now_db: String) -> Result<bool, AppError> {
-    if let Some(pool) = db::active_pool() {
-        return pool_claim_pairing(pool, &code_hash, &now_db).await;
+    // Worker-routed like the other pairing stores (persea#322); `None`
+    // falls back to the legacy SQLite path below, errors propagate.
+    if let Some(res) = db::claim_active_pairing(&code_hash, &now_db) {
+        return res.map_err(AppError::from);
     }
     let db = db.clone();
     let result: rusqlite::Result<bool> =
@@ -393,8 +393,10 @@ pub async fn claim_pairing(db: &Db, code_hash: String, now_db: String) -> Result
 /// previous paired token on re-pair (refresh semantics: pairing again
 /// invalidates the old device token).
 pub async fn revoke_tokens_named(db: &Db, user_id: i64, name: String) -> Result<usize, AppError> {
-    if let Some(pool) = db::active_pool() {
-        return pool_revoke_tokens_named(pool, user_id, &name).await;
+    // Worker-routed like the other pairing stores (persea#322); `None`
+    // falls back to the legacy SQLite path below, errors propagate.
+    if let Some(res) = db::revoke_tokens_named_active(user_id, &name) {
+        return res.map_err(AppError::from);
     }
     let db = db.clone();
     let result: rusqlite::Result<usize> =
@@ -416,8 +418,10 @@ pub async fn user_identity_by_id(
     db: &Db,
     user_id: i64,
 ) -> Result<Option<(String, String)>, AppError> {
-    if let Some(pool) = db::active_pool() {
-        return pool_user_identity_by_id(pool, user_id).await;
+    // Worker-routed like the other pairing stores (persea#322); `None`
+    // falls back to the legacy SQLite path below, errors propagate.
+    if let Some(res) = db::user_identity_by_id_active(user_id) {
+        return res.map_err(AppError::from);
     }
     let db = db.clone();
     let result: rusqlite::Result<Option<(String, String)>> =
@@ -432,236 +436,6 @@ pub async fn user_identity_by_id(
         .await
         .map_err(AppError::from)?;
     result.map_err(AppError::from)
-}
-
-// ── SQLx pool storage ───────────────────────────────────────────────────
-
-async fn pool_lookup_pairing(
-    pool: &DbPool,
-    code_hash: &str,
-) -> Result<Option<PairingRow>, AppError> {
-    use sqlx::Row as _;
-    let row = match pool {
-        DbPool::Postgres(p) => sqlx::query(
-            "SELECT user_id, hostname, expires_at, consumed_at
-                 FROM desktop_pairings WHERE code_hash = $1",
-        )
-        .bind(code_hash)
-        .fetch_optional(p)
-        .await
-        .map(|opt| {
-            opt.map(|r| {
-                (
-                    r.get::<Option<i64>, _>(0),
-                    r.get::<String, _>(1),
-                    r.get::<String, _>(2),
-                    r.get::<Option<String>, _>(3),
-                )
-            })
-        }),
-        DbPool::MySQL(p) => sqlx::query(
-            "SELECT user_id, hostname, expires_at, consumed_at
-                 FROM desktop_pairings WHERE code_hash = ?",
-        )
-        .bind(code_hash)
-        .fetch_optional(p)
-        .await
-        .map(|opt| {
-            opt.map(|r| {
-                (
-                    r.get::<Option<i64>, _>(0),
-                    r.get::<String, _>(1),
-                    r.get::<String, _>(2),
-                    r.get::<Option<String>, _>(3),
-                )
-            })
-        }),
-        DbPool::SQLite(p) => sqlx::query(
-            "SELECT user_id, hostname, expires_at, consumed_at
-                 FROM desktop_pairings WHERE code_hash = ?",
-        )
-        .bind(code_hash)
-        .fetch_optional(p)
-        .await
-        .map(|opt| {
-            opt.map(|r| {
-                (
-                    r.get::<Option<i64>, _>(0),
-                    r.get::<String, _>(1),
-                    r.get::<String, _>(2),
-                    r.get::<Option<String>, _>(3),
-                )
-            })
-        }),
-        DbPool::None => return Err(no_pool_err()),
-    };
-    let row = row.map_err(|e| db_err(&e))?;
-    Ok(
-        row.map(|(user_id, hostname, expires_at, consumed_at)| PairingRow {
-            user_id,
-            hostname,
-            expires_at,
-            consumed_at,
-        }),
-    )
-}
-
-async fn pool_bind_pairing(
-    pool: &DbPool,
-    code_hash: &str,
-    user_id: i64,
-    now_db: &str,
-) -> Result<bool, AppError> {
-    let n = match pool {
-        DbPool::Postgres(p) => {
-            sqlx::query(
-                "UPDATE desktop_pairings SET user_id = $1
-                 WHERE code_hash = $2 AND user_id IS NULL AND consumed_at IS NULL AND expires_at > $3",
-            )
-            .bind(user_id)
-            .bind(code_hash)
-            .bind(now_db)
-            .execute(p)
-            .await
-            .map(|r| r.rows_affected())
-        }
-        DbPool::MySQL(p) => {
-            sqlx::query(
-                "UPDATE desktop_pairings SET user_id = ?
-                 WHERE code_hash = ? AND user_id IS NULL AND consumed_at IS NULL AND expires_at > ?",
-            )
-            .bind(user_id)
-            .bind(code_hash)
-            .bind(now_db)
-            .execute(p)
-            .await
-            .map(|r| r.rows_affected())
-        }
-        DbPool::SQLite(p) => {
-            sqlx::query(
-                "UPDATE desktop_pairings SET user_id = ?
-                 WHERE code_hash = ? AND user_id IS NULL AND consumed_at IS NULL AND expires_at > ?",
-            )
-            .bind(user_id)
-            .bind(code_hash)
-            .bind(now_db)
-            .execute(p)
-            .await
-            .map(|r| r.rows_affected())
-        }
-        DbPool::None => return Err(no_pool_err()),
-    };
-    let n = n.map_err(|e| db_err(&e))?;
-    Ok(n > 0)
-}
-
-async fn pool_claim_pairing(
-    pool: &DbPool,
-    code_hash: &str,
-    now_db: &str,
-) -> Result<bool, AppError> {
-    let n = match pool {
-        DbPool::Postgres(p) => {
-            sqlx::query(
-                "UPDATE desktop_pairings SET consumed_at = $1
-                 WHERE code_hash = $2 AND user_id IS NOT NULL AND consumed_at IS NULL AND expires_at > $1",
-            )
-            .bind(now_db)
-            .bind(code_hash)
-            .execute(p)
-            .await
-            .map(|r| r.rows_affected())
-        }
-        DbPool::MySQL(p) => {
-            sqlx::query(
-                "UPDATE desktop_pairings SET consumed_at = ?
-                 WHERE code_hash = ? AND user_id IS NOT NULL AND consumed_at IS NULL AND expires_at > ?",
-            )
-            .bind(now_db)
-            .bind(code_hash)
-            .bind(now_db)
-            .execute(p)
-            .await
-            .map(|r| r.rows_affected())
-        }
-        DbPool::SQLite(p) => {
-            sqlx::query(
-                "UPDATE desktop_pairings SET consumed_at = ?
-                 WHERE code_hash = ? AND user_id IS NOT NULL AND consumed_at IS NULL AND expires_at > ?",
-            )
-            .bind(now_db)
-            .bind(code_hash)
-            .bind(now_db)
-            .execute(p)
-            .await
-            .map(|r| r.rows_affected())
-        }
-        DbPool::None => return Err(no_pool_err()),
-    };
-    let n = n.map_err(|e| db_err(&e))?;
-    Ok(n > 0)
-}
-
-async fn pool_revoke_tokens_named(
-    pool: &DbPool,
-    user_id: i64,
-    name: &str,
-) -> Result<usize, AppError> {
-    let n = match pool {
-        DbPool::Postgres(p) => {
-            sqlx::query("DELETE FROM user_api_tokens WHERE user_id = $1 AND name = $2")
-                .bind(user_id)
-                .bind(name)
-                .execute(p)
-                .await
-                .map(|r| r.rows_affected())
-        }
-        DbPool::MySQL(p) => {
-            sqlx::query("DELETE FROM user_api_tokens WHERE user_id = ? AND name = ?")
-                .bind(user_id)
-                .bind(name)
-                .execute(p)
-                .await
-                .map(|r| r.rows_affected())
-        }
-        DbPool::SQLite(p) => {
-            sqlx::query("DELETE FROM user_api_tokens WHERE user_id = ? AND name = ?")
-                .bind(user_id)
-                .bind(name)
-                .execute(p)
-                .await
-                .map(|r| r.rows_affected())
-        }
-        DbPool::None => return Err(no_pool_err()),
-    };
-    let n = n.map_err(|e| db_err(&e))?;
-    Ok(n as usize)
-}
-
-async fn pool_user_identity_by_id(
-    pool: &DbPool,
-    user_id: i64,
-) -> Result<Option<(String, String)>, AppError> {
-    use sqlx::Row as _;
-    let row = match pool {
-        DbPool::Postgres(p) => sqlx::query("SELECT email, role FROM users WHERE id = $1")
-            .bind(user_id)
-            .fetch_optional(p)
-            .await
-            .map(|opt| opt.map(|r| (r.get::<String, _>(0), r.get::<String, _>(1)))),
-        DbPool::MySQL(p) => sqlx::query("SELECT email, role FROM users WHERE id = ?")
-            .bind(user_id)
-            .fetch_optional(p)
-            .await
-            .map(|opt| opt.map(|r| (r.get::<String, _>(0), r.get::<String, _>(1)))),
-        DbPool::SQLite(p) => sqlx::query("SELECT email, role FROM users WHERE id = ?")
-            .bind(user_id)
-            .fetch_optional(p)
-            .await
-            .map(|opt| opt.map(|r| (r.get::<String, _>(0), r.get::<String, _>(1)))),
-        DbPool::None => return Err(no_pool_err()),
-    };
-    row.map_err(|e| db_err(&e))
 }
 
 // ── Handlers ────────────────────────────────────────────────────────────

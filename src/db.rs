@@ -11355,7 +11355,322 @@ async fn insert_pairing_pool(
     Ok(())
 }
 
-// ── RBAC ───────────────────────────────────────────────────────────────
+/// Look up a pending pairing THROUGH the worker thread (persea#322).
+/// `Some(result)` carries the pool store's answer — including a not-found
+/// `Ok(None)` — and `None` means no pool store is active so the caller can
+/// fall back to the legacy SQLite path. Pool-store failures are returned as
+/// errors and must NOT trigger that fallback: the record belongs in the
+/// real store.
+pub fn lookup_active_pairing(
+    code_hash: &str,
+) -> Option<rusqlite::Result<Option<crate::api::pairing::PairingRow>>> {
+    if !pool_active() {
+        return None;
+    }
+    let code_hash = code_hash.to_string();
+    Some(pool_call(move |pool: &'static DbPool| async move {
+        lookup_pairing_pool(pool, &code_hash).await
+    }))
+}
+
+/// Bind a pending pairing to the confirming user THROUGH the worker thread
+/// (persea#322). Returns `None` when no pool store is active (legacy SQLite
+/// fallback); pool-store failures propagate as errors.
+pub fn bind_active_pairing(
+    code_hash: &str,
+    user_id: i64,
+    now_db: &str,
+) -> Option<rusqlite::Result<bool>> {
+    if !pool_active() {
+        return None;
+    }
+    let code_hash = code_hash.to_string();
+    let now_db = now_db.to_string();
+    Some(pool_call(move |pool: &'static DbPool| async move {
+        bind_pairing_pool(pool, &code_hash, user_id, &now_db).await
+    }))
+}
+
+/// Claim an approved pairing (single-use token handout) THROUGH the worker
+/// thread (persea#322). Returns `None` when no pool store is active (legacy
+/// SQLite fallback); pool-store failures propagate as errors.
+pub fn claim_active_pairing(code_hash: &str, now_db: &str) -> Option<rusqlite::Result<bool>> {
+    if !pool_active() {
+        return None;
+    }
+    let code_hash = code_hash.to_string();
+    let now_db = now_db.to_string();
+    Some(pool_call(move |pool: &'static DbPool| async move {
+        claim_pairing_pool(pool, &code_hash, &now_db).await
+    }))
+}
+
+/// Delete a user's named pairing tokens THROUGH the worker thread
+/// (persea#322). Returns `None` when no pool store is active (legacy SQLite
+/// fallback); pool-store failures propagate as errors.
+pub fn revoke_tokens_named_active(user_id: i64, name: &str) -> Option<rusqlite::Result<usize>> {
+    if !pool_active() {
+        return None;
+    }
+    let name = name.to_string();
+    Some(pool_call(move |pool: &'static DbPool| async move {
+        revoke_tokens_named_pool(pool, user_id, &name).await
+    }))
+}
+
+/// Fetch a user's email and role THROUGH the worker thread (persea#322).
+/// `Some(result)` carries the pool store's answer — including a not-found
+/// `Ok(None)` — and `None` means no pool store is active (legacy SQLite
+/// fallback); pool-store failures propagate as errors.
+pub fn user_identity_by_id_active(
+    user_id: i64,
+) -> Option<rusqlite::Result<Option<(String, String)>>> {
+    if !pool_active() {
+        return None;
+    }
+    Some(pool_call(move |pool: &'static DbPool| async move {
+        user_identity_by_id_pool(pool, user_id).await
+    }))
+}
+
+/// Pool-store pairing lookup backing [`lookup_active_pairing`]. Same table
+/// and columns the legacy SQLite path reads; `PairingRow` comes from
+/// `src/api/pairing.rs` so both paths hand the handler one row type.
+async fn lookup_pairing_pool(
+    pool: &DbPool,
+    code_hash: &str,
+) -> rusqlite::Result<Option<crate::api::pairing::PairingRow>> {
+    use crate::api::pairing::PairingRow;
+    use sqlx::Row as _;
+    let row = match pool {
+        DbPool::Postgres(p) => sqlx::query(
+            "SELECT user_id, hostname, expires_at, consumed_at
+                 FROM desktop_pairings WHERE code_hash = $1",
+        )
+        .bind(code_hash)
+        .fetch_optional(p)
+        .await
+        .map(|opt| {
+            opt.map(|r| {
+                (
+                    r.get::<Option<i64>, _>(0),
+                    r.get::<String, _>(1),
+                    r.get::<String, _>(2),
+                    r.get::<Option<String>, _>(3),
+                )
+            })
+        }),
+        DbPool::MySQL(p) => sqlx::query(
+            "SELECT user_id, hostname, expires_at, consumed_at
+                 FROM desktop_pairings WHERE code_hash = ?",
+        )
+        .bind(code_hash)
+        .fetch_optional(p)
+        .await
+        .map(|opt| {
+            opt.map(|r| {
+                (
+                    r.get::<Option<i64>, _>(0),
+                    r.get::<String, _>(1),
+                    r.get::<String, _>(2),
+                    r.get::<Option<String>, _>(3),
+                )
+            })
+        }),
+        DbPool::SQLite(p) => sqlx::query(
+            "SELECT user_id, hostname, expires_at, consumed_at
+                 FROM desktop_pairings WHERE code_hash = ?",
+        )
+        .bind(code_hash)
+        .fetch_optional(p)
+        .await
+        .map(|opt| {
+            opt.map(|r| {
+                (
+                    r.get::<Option<i64>, _>(0),
+                    r.get::<String, _>(1),
+                    r.get::<String, _>(2),
+                    r.get::<Option<String>, _>(3),
+                )
+            })
+        }),
+        DbPool::None => return Err(no_pool_err()),
+    };
+    let row = row.map_err(map_sqlx_err)?;
+    Ok(
+        row.map(|(user_id, hostname, expires_at, consumed_at)| PairingRow {
+            user_id,
+            hostname,
+            expires_at,
+            consumed_at,
+        }),
+    )
+}
+
+/// Pool-store bind backing [`bind_active_pairing`]. Returns `false` when
+/// the record is already bound or consumed (single-use under races).
+async fn bind_pairing_pool(
+    pool: &DbPool,
+    code_hash: &str,
+    user_id: i64,
+    now_db: &str,
+) -> rusqlite::Result<bool> {
+    let n = match pool {
+        DbPool::Postgres(p) => {
+            sqlx::query(
+                "UPDATE desktop_pairings SET user_id = $1
+                 WHERE code_hash = $2 AND user_id IS NULL AND consumed_at IS NULL AND expires_at > $3",
+            )
+            .bind(user_id)
+            .bind(code_hash)
+            .bind(now_db)
+            .execute(p)
+            .await
+            .map(|r| r.rows_affected())
+        }
+        DbPool::MySQL(p) => {
+            sqlx::query(
+                "UPDATE desktop_pairings SET user_id = ?
+                 WHERE code_hash = ? AND user_id IS NULL AND consumed_at IS NULL AND expires_at > ?",
+            )
+            .bind(user_id)
+            .bind(code_hash)
+            .bind(now_db)
+            .execute(p)
+            .await
+            .map(|r| r.rows_affected())
+        }
+        DbPool::SQLite(p) => {
+            sqlx::query(
+                "UPDATE desktop_pairings SET user_id = ?
+                 WHERE code_hash = ? AND user_id IS NULL AND consumed_at IS NULL AND expires_at > ?",
+            )
+            .bind(user_id)
+            .bind(code_hash)
+            .bind(now_db)
+            .execute(p)
+            .await
+            .map(|r| r.rows_affected())
+        }
+        DbPool::None => return Err(no_pool_err()),
+    };
+    let n = n.map_err(map_sqlx_err)?;
+    Ok(n > 0)
+}
+
+/// Pool-store claim backing [`claim_active_pairing`]. Returns `false` when
+/// another poll already claimed the record.
+async fn claim_pairing_pool(
+    pool: &DbPool,
+    code_hash: &str,
+    now_db: &str,
+) -> rusqlite::Result<bool> {
+    let n = match pool {
+        DbPool::Postgres(p) => {
+            sqlx::query(
+                "UPDATE desktop_pairings SET consumed_at = $1
+                 WHERE code_hash = $2 AND user_id IS NOT NULL AND consumed_at IS NULL AND expires_at > $1",
+            )
+            .bind(now_db)
+            .bind(code_hash)
+            .execute(p)
+            .await
+            .map(|r| r.rows_affected())
+        }
+        DbPool::MySQL(p) => {
+            sqlx::query(
+                "UPDATE desktop_pairings SET consumed_at = ?
+                 WHERE code_hash = ? AND user_id IS NOT NULL AND consumed_at IS NULL AND expires_at > ?",
+            )
+            .bind(now_db)
+            .bind(code_hash)
+            .bind(now_db)
+            .execute(p)
+            .await
+            .map(|r| r.rows_affected())
+        }
+        DbPool::SQLite(p) => {
+            sqlx::query(
+                "UPDATE desktop_pairings SET consumed_at = ?
+                 WHERE code_hash = ? AND user_id IS NOT NULL AND consumed_at IS NULL AND expires_at > ?",
+            )
+            .bind(now_db)
+            .bind(code_hash)
+            .bind(now_db)
+            .execute(p)
+            .await
+            .map(|r| r.rows_affected())
+        }
+        DbPool::None => return Err(no_pool_err()),
+    };
+    let n = n.map_err(map_sqlx_err)?;
+    Ok(n > 0)
+}
+
+/// Pool-store delete backing [`revoke_tokens_named_active`].
+async fn revoke_tokens_named_pool(
+    pool: &DbPool,
+    user_id: i64,
+    name: &str,
+) -> rusqlite::Result<usize> {
+    let n = match pool {
+        DbPool::Postgres(p) => {
+            sqlx::query("DELETE FROM user_api_tokens WHERE user_id = $1 AND name = $2")
+                .bind(user_id)
+                .bind(name)
+                .execute(p)
+                .await
+                .map(|r| r.rows_affected())
+        }
+        DbPool::MySQL(p) => {
+            sqlx::query("DELETE FROM user_api_tokens WHERE user_id = ? AND name = ?")
+                .bind(user_id)
+                .bind(name)
+                .execute(p)
+                .await
+                .map(|r| r.rows_affected())
+        }
+        DbPool::SQLite(p) => {
+            sqlx::query("DELETE FROM user_api_tokens WHERE user_id = ? AND name = ?")
+                .bind(user_id)
+                .bind(name)
+                .execute(p)
+                .await
+                .map(|r| r.rows_affected())
+        }
+        DbPool::None => return Err(no_pool_err()),
+    };
+    let n = n.map_err(map_sqlx_err)?;
+    Ok(n as usize)
+}
+
+/// Pool-store user identity backing [`user_identity_by_id_active`].
+/// Returns the user's email and role by id, or `Ok(None)` when unknown.
+async fn user_identity_by_id_pool(
+    pool: &DbPool,
+    user_id: i64,
+) -> rusqlite::Result<Option<(String, String)>> {
+    use sqlx::Row as _;
+    let row = match pool {
+        DbPool::Postgres(p) => sqlx::query("SELECT email, role FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(p)
+            .await
+            .map(|opt| opt.map(|r| (r.get::<String, _>(0), r.get::<String, _>(1)))),
+        DbPool::MySQL(p) => sqlx::query("SELECT email, role FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_optional(p)
+            .await
+            .map(|opt| opt.map(|r| (r.get::<String, _>(0), r.get::<String, _>(1)))),
+        DbPool::SQLite(p) => sqlx::query("SELECT email, role FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_optional(p)
+            .await
+            .map(|opt| opt.map(|r| (r.get::<String, _>(0), r.get::<String, _>(1)))),
+        DbPool::None => return Err(no_pool_err()),
+    };
+    row.map_err(map_sqlx_err)
+}
 
 pub(crate) async fn rbac_create_group_pool(
     pool: &DbPool,
