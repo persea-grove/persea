@@ -1,7 +1,8 @@
 // Modal focus trap and keyboard handling.
-// Unused: no template loads this file. Per-page scripts implement their own
-// modal handling (see the player overlay in templates/pages/recordings.html).
-// Helpers are kept for future wiring.
+// Loaded on every page by templates/base.html. The Tab trap applies to
+// whichever [role="dialog"] is open; Escape closes it only when the dialog
+// offers a close target ([data-close], .modal-cancel, .btn-cancel), so a
+// destructive dialog can require an explicit choice.
 
 function openModal(id) {
     var el = document.getElementById(id);

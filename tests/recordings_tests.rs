@@ -115,7 +115,7 @@ async fn listing_includes_plain_and_encrypted_recordings() {
     let resp = router.oneshot(req_get("/api/recordings")).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let json = body_json(resp).await;
-    let items = json.as_array().unwrap();
+    let items = json["recordings"].as_array().unwrap();
 
     let names: Vec<&str> = items.iter().map(|r| r["name"].as_str().unwrap()).collect();
     assert!(

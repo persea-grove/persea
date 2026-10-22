@@ -113,7 +113,7 @@ All require authentication (API key, user token, or session cookie) with the
 | `GET` | `/api/reports/activity` | Sessions started per hour (`hours` param, 1–168; default 24) |
 | `GET` | `/api/reports/top-connections` | Most-used connections leaderboard |
 | `GET` | `/api/reports/top-users` | Most active users leaderboard |
-| `GET` | `/api/recordings` | Recording list with metadata |
+| `GET` | `/api/recordings` | Recording list with metadata (`{ recordings, total, limit, offset }`; paginated, 0-second artifacts excluded unless `include_empty=true`) |
 | `GET` | `/api/recordings/{name}` | Play/download a recording (admin role to delete) |
 
 ### Query parameters for session endpoints
