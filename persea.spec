@@ -151,6 +151,7 @@ fi
 
 %files
 %license debian/copyright
+%doc NOTICE
 %dir %{_prefix}
 %{_prefix}/bin/persea
 %{_prefix}/bin/drive-setup.sh

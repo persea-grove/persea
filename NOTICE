@@ -1,0 +1,9 @@
+persea
+Copyright 2025 Sol1 Pty Ltd
+Copyright 2025 the persea contributors
+
+This product includes software developed at Sol1 Pty Ltd as RustGuac
+(https://github.com/sol1/rustguac), licensed under the Apache License,
+Version 2.0. Persea is a derivative work of that project. The upstream
+copyright notice is retained in the LICENSE file as required by section
+4(c) of the Apache License, Version 2.0.

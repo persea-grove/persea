@@ -179,6 +179,10 @@ COPY --from=rust-builder /build/persea /opt/persea/bin/persea
 # Install static web assets
 COPY static/ /opt/persea/static/
 
+# Licence and attribution. Apache-2.0 section 4(d) requires the NOTICE file
+# to ship with the distribution when the upstream work had one.
+COPY LICENSE NOTICE /usr/share/doc/persea/
+
 # Library path for guacd
 RUN echo "/opt/persea/lib" > /etc/ld.so.conf.d/persea.conf && ldconfig
 
