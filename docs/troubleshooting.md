@@ -112,6 +112,7 @@ When you are logged in with the operator role or higher, the same endpoint retur
 
 - **"Database is locked" errors (SQLite).** The admin database is a single SQLite file with one writer. Lock errors mean a second process is touching it: another persea instance, a manual `sqlite3` session, a backup tool, or the file living on NFS/SMB (SQLite locking is unreliable there). Fix: find the other holder (`lsof persea.db` or `fuser persea.db`), keep the file on local disk, and ensure its directory is writable by the persea user. For shared filesystems use `db_url` with Postgres/MySQL.
 - **Sessions fail authentication on the target with the raw encrypted blob.** Credentials stored by the database backend are AES-encrypted with the storage key. If `PERSEA_STORAGE_KEY` is unset, missing, or wrong, guacd receives the encrypted value instead of the real password. Fix: set the **same** key that encrypted the data (`PERSEA_STORAGE_KEY` in `/opt/persea/env`, or `[storage].encryption_key`), then restart. Entries created while no key was configured cannot be decrypted afterwards: re-enter those credentials. A wrong-format key (not 64 hex characters) crashes the process at connect time with `panic: invalid encryption key`: validate the key before restarting.
+- **The Reports page returns 500, then every session cookie starts failing, on PostgreSQL.** Older builds ran SQLite-only SQL in the report and session-history queries; the failed query killed the database worker, which took authentication down with it. Fix: upgrade to a build with portable report SQL and the worker that survives a failed query.
 - **Session history missing.** History is kept for `session_history_retention_days` (default 90) and cleaned hourly; 0 keeps everything. Records older than the window are gone.
 
 ### Vault problems
@@ -123,12 +124,17 @@ When you are logged in with the operator role or higher, the same endpoint retur
 
 ### Web browser sessions
 
+- **Every site shows `DNS_PROBE_FINISHED_NXDOMAIN`.** The entry's `allowed_domains` list is empty: a web session maps every host to a non-routable address unless it is listed. Fix: edit the entry and add the domains it needs. A bare domain also allows its subdomains; `localhost` and link-local addresses stay blocked.
+- **The session dies immediately with `Chromium exited immediately (signal: 6 SIGABRT)` and stderr mentioning `failed to move to new namespace`.** Chromium's sandbox cannot start on this host, which happens on some containerized or restricted setups. Fix: point `chromium_path` at a wrapper script that `exec`s the real Chromium binary with `--no-sandbox`, then restart persea.
 - **Chromium won't start.** Verify Chromium and Xvnc are installed and reachable as the config's `xvnc_path`/`chromium_path`, and that the `persea` user has a home directory (Chromium needs one). Check for running Xvnc processes: `ps aux | grep Xvnc`.
 - **Black screen in a browser session.** Chromium may have crashed: check the logs around the session start. Also check the display-number range in config (`display_range_start`/`display_range_end`); a full range means no display is free.
 
 ### VDI containers
 
-- **Container won't start.** Verify Docker is running, the `persea` user is in the `docker` group (restart the service after adding it), the image exists (`docker images`), and look at the container itself: `docker logs persea-vdi-<username>`.
+- **`failed to create container: ... status code 500: invalid mode: nosuid,nodev`.** Docker Engine 29 rejects the legacy bind-mode string. Fix: upgrade to a persea build that uses structured mounts for VDI home directories.
+- **`VDI ready timeout: xrdp not ready on 127.0.0.1:<port> after 30s`.** persea is probably running in a container, so its loopback cannot reach the port Docker published on the Docker host. Fix: set `[vdi] endpoint_host` to an address that reaches the Docker host, such as its LAN IP or the compose network gateway.
+- **The reaper logs `failed to list containers`, or VDI sessions fail to create.** The `persea` user cannot reach `/var/run/docker.sock`. Fix: add the user to the host's `docker` group (restart the service after adding it). On the Docker image, pass the host docker GID with `group_add` in compose or `--group-add <docker-gid>`, and build with the matching `PGID`.
+- **Container won't start.** Verify Docker is running, the image exists (`docker images`), and look at the container itself: `docker logs persea-vdi-<username>`.
 
 ### Graceful shutdown hangs
 
