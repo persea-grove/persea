@@ -18,7 +18,10 @@ use tower::ServiceExt;
 const TEST_KEY_HEX: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
 
 const PLAIN_CONTENT: &[u8] = b"4.3\nsize 800,600\n";
-const ENC_PLAINTEXT: &[u8] = b"4.3\nsize 1024,768\n";
+const ENC_PLAINTEXT: &[u8] = b"4.size,3.800,3.600;\
+4.sync,4.1000,1.0;\
+4.size,3.800,3.600;\
+4.sync,3.200,1.0;";
 
 fn temp_dir(tag: &str) -> (tempfile::TempDir, PathBuf) {
     // Unique dir under the OS temp dir, removed on drop (even on panic).

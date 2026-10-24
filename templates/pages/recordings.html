@@ -57,6 +57,7 @@
         <div class="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl w-full max-w-7xl max-h-[90vh] flex flex-col">
             <div id="player-header" class="flex items-center justify-between px-4 py-3 border-b border-[var(--border)]">
                 <span id="player-title" class="text-sm font-medium text-[var(--text-secondary)]">Playback</span>
+                <span id="player-status" class="text-xs text-red-400 hidden" role="alert" aria-live="polite"></span>
                 <button id="player-close" class="btn btn-sm text-[var(--text-muted)] hover:text-[var(--text-primary)] p-1" aria-label="Close player">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                 </button>
@@ -326,6 +327,9 @@
         playBtn.textContent = 'Play';
         seekSlider.value = 0;
         timeEl.textContent = '0:00 / 0:00';
+        var statusEl = document.getElementById('player-status');
+        statusEl.textContent = '';
+        statusEl.classList.add('hidden');
     }
 
     // ── Fullscreen toggle ──
@@ -393,10 +397,31 @@
         var duration = 0;
         var currentPos = 0;
         var seeking = false;
+        var autoplayWhenReady = false;
+        var statusEl = document.getElementById('player-status');
 
         recording.onprogress = function(millis) {
             duration = millis;
             timeEl.textContent = formatTime(currentPos) + ' / ' + formatTime(duration);
+            if (autoplayWhenReady && millis > 0) {
+                autoplayWhenReady = false;
+                statusEl.classList.add('hidden');
+                recording.play();
+            }
+        };
+
+        recording.onload = function() {
+            if (recording.getDuration() <= 0) {
+                autoplayWhenReady = false;
+                statusEl.textContent = 'This recording contains no replayable frames.';
+                statusEl.classList.remove('hidden');
+            }
+        };
+
+        recording.onerror = function(message) {
+            autoplayWhenReady = false;
+            statusEl.textContent = 'Playback failed: ' + (message || 'unknown error');
+            statusEl.classList.remove('hidden');
         };
 
         recording.onplay = function() { playBtn.textContent = 'Pause'; };
@@ -408,8 +433,18 @@
         };
 
         playBtn.onclick = function() {
-            if (recording.isPlaying()) recording.pause();
-            else recording.play();
+            if (recording.isPlaying()) {
+                recording.pause();
+            } else if (recording.getDuration() > 0) {
+                statusEl.classList.add('hidden');
+                recording.play();
+            } else {
+                // Pressed before the first frame was parsed: start as soon as
+                // the recording yields one instead of silently doing nothing.
+                autoplayWhenReady = true;
+                statusEl.textContent = 'Loading recording\u2026';
+                statusEl.classList.remove('hidden');
+            }
         };
 
         seekSlider.addEventListener('mousedown', function() { seeking = true; });
