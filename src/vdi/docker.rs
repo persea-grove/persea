@@ -2,7 +2,10 @@
 
 use super::{ContainerInfo, ContainerSpec, VdiDriver, VdiError};
 use bollard::exec::CreateExecOptions;
-use bollard::models::{ContainerCreateBody, HostConfig, PortBinding};
+use bollard::models::{
+    ContainerCreateBody, HostConfig, Mount, MountBindOptions, MountBindOptionsPropagationEnum,
+    MountType, PortBinding,
+};
 use bollard::query_parameters::{
     CreateContainerOptions, ListContainersOptions, RemoveContainerOptions, StartContainerOptions,
     StopContainerOptions,
@@ -118,6 +121,26 @@ impl DockerDriver {
             && !username.contains('/')
             && !username.contains('\\')
             && !username.contains("..")
+    }
+
+    /// Structured bind mount for a user's persistent home directory.
+    ///
+    /// Docker's mounts API has no `nosuid`/`nodev` fields; the legacy `-v`
+    /// mode string that carried them is rejected by current engines, so the
+    /// mount is read-write with private propagation instead.
+    fn home_mount(source: &std::path::Path, username: &str) -> Mount {
+        Mount {
+            target: Some(format!("/home/{}", username)),
+            source: Some(source.display().to_string()),
+            typ: Some(MountType::BIND),
+            read_only: Some(false),
+            bind_options: Some(MountBindOptions {
+                propagation: Some(MountBindOptionsPropagationEnum::RPRIVATE),
+                create_mountpoint: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
     }
 
     /// Candidate host ports to ask Docker to bind. Without a configured range,
@@ -579,7 +602,7 @@ impl DockerDriver {
                 };
 
                 // Persistent home directory bind mount
-                let binds = if let Some(ref base) = spec.home_base {
+                let mounts = if let Some(ref base) = spec.home_base {
                     // Defense in depth: the session layer sanitizes the
                     // username; this guarantees no separator or traversal
                     // component can reach the mount path even if a future
@@ -624,12 +647,17 @@ impl DockerDriver {
                     if !resolved.starts_with(&base_path) {
                         return Err(VdiError::Docker("path traversal in VDI home base".into()));
                     }
-                    let mount = format!(
-                        "{}:/home/{}:nosuid,nodev",
-                        resolved.display(),
-                        spec.username
+                    let mount = Self::home_mount(&resolved, &spec.username);
+                    tracing::info!(
+                        source = ?resolved,
+                        "VDI home directory bind mount"
                     );
-                    tracing::info!(mount = %mount, "VDI home directory bind mount");
+                    // Docker's mounts API has no nosuid/nodev for bind
+                    // mounts; dropping them is required for Engine 29+.
+                    tracing::warn!(
+                        "VDI home bind mount cannot carry nosuid,nodev; \
+                         mount options dropped"
+                    );
                     Some(vec![mount])
                 } else {
                     None
@@ -653,7 +681,7 @@ impl DockerDriver {
                         port_bindings: Some(port_bindings),
                         nano_cpus,
                         memory,
-                        binds: binds.clone(),
+                        mounts: mounts.clone(),
                         ..Default::default()
                     };
 
@@ -1094,6 +1122,16 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn home_mount_uses_structured_bind_api() {
+        let mount = DockerDriver::home_mount(std::path::Path::new("/srv/vdi/alice"), "alice");
+        assert_eq!(mount.typ, Some(MountType::BIND));
+        assert_eq!(mount.source.as_deref(), Some("/srv/vdi/alice"));
+        assert_eq!(mount.target.as_deref(), Some("/home/alice"));
+        assert_eq!(mount.read_only, Some(false));
+        assert!(mount.bind_options.is_some());
     }
 
     #[test]
