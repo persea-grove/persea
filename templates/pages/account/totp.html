@@ -97,7 +97,7 @@
                         placeholder="000000">
                 </div>
                 <div class="flex items-center justify-end gap-3">
-                    <button type="button" onclick="closeDisableModal()" class="px-4 py-2 text-[var(--text-muted)] hover:text-[var(--text-primary)] text-sm transition-colors">
+                    <button type="button" id="btn-cancel-disable" class="px-4 py-2 text-[var(--text-muted)] hover:text-[var(--text-primary)] text-sm transition-colors">
                         Cancel
                     </button>
                     <button type="submit" class="btn btn-danger btn-sm">
@@ -128,15 +128,18 @@
                 icon.innerHTML = '<svg class="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>';
                 title.textContent = 'Two-Factor Authentication Enabled';
                 desc.textContent = 'Your account is protected with TOTP.';
-                actions.innerHTML = '<button onclick="showRecoveryCodes()" class="btn btn-secondary btn-sm">View Recovery Codes</button>' +
-                    '<button onclick="openDisableModal()" class="btn btn-danger btn-sm">Disable</button>';
+                actions.innerHTML = '<button id="btn-view-recovery" type="button" class="btn btn-secondary btn-sm">View Recovery Codes</button>' +
+                    '<button id="btn-open-disable" type="button" class="btn btn-danger btn-sm">Disable</button>';
+                document.getElementById('btn-view-recovery').addEventListener('click', function() { showRecoveryCodes(); });
+                document.getElementById('btn-open-disable').addEventListener('click', function() { openDisableModal(); });
                 enroll.classList.add('hidden');
             } else {
                 icon.className = 'w-12 h-12 rounded-lg bg-[var(--bg-card)] border border-[var(--border)] flex items-center justify-center shrink-0';
                 icon.innerHTML = '<svg class="w-6 h-6 text-[var(--text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>';
                 title.textContent = 'Two-Factor Authentication Not Enabled';
                 desc.textContent = 'Add an extra layer of security to your account.';
-                actions.innerHTML = '<button onclick="startEnrollment()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-[var(--text-primary)] rounded-lg text-sm font-medium transition-colors">Enable TOTP</button>';
+                actions.innerHTML = '<button id="btn-start-enrollment" type="button" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-[var(--text-primary)] rounded-lg text-sm font-medium transition-colors">Enable TOTP</button>';
+                document.getElementById('btn-start-enrollment').addEventListener('click', function() { startEnrollment(); });
                 enroll.classList.add('hidden');
                 recovery.classList.add('hidden');
             }
@@ -239,6 +242,8 @@
             document.getElementById('disable-form').reset();
             document.getElementById('disable-error').classList.add('hidden');
         };
+
+        document.getElementById('btn-cancel-disable').addEventListener('click', closeDisableModal);
 
         document.getElementById('disable-form').addEventListener('submit', function(e) {
             e.preventDefault();

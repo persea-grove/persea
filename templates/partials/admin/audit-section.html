@@ -6,18 +6,18 @@
         </div>
         <div class="flex items-center gap-3">
             <div id="chain-status" class="px-3 py-1.5 rounded-lg text-sm font-medium border" aria-live="polite"></div>
-            <button onclick="verifyChain()"
+            <button id="verify-chain-btn" type="button"
                     class="btn btn-info btn-sm">
                 Verify Chain
             </button>
             <div class="relative">
-                <button onclick="var m=document.getElementById('export-menu');var h=m.classList.toggle('hidden');this.setAttribute('aria-expanded',String(!h))"
+                <button id="export-menu-btn" type="button"
                         class="btn btn-secondary btn-sm" aria-expanded="false" aria-controls="export-menu">
                     Export ▾
                 </button>
                 <div id="export-menu" class="hidden absolute right-0 mt-1 bg-[var(--bg-card)] border border-[var(--border)] rounded-lg shadow-lg py-1 z-10">
-                    <button onclick="exportAudit('csv')" class="block w-full text-left px-4 py-2 text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]">Export CSV</button>
-                    <button onclick="exportAudit('json')" class="block w-full text-left px-4 py-2 text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]">Export JSON</button>
+                    <button id="export-csv-btn" type="button" class="block w-full text-left px-4 py-2 text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]">Export CSV</button>
+                    <button id="export-json-btn" type="button" class="block w-full text-left px-4 py-2 text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]">Export JSON</button>
                 </div>
             </div>
         </div>
@@ -204,4 +204,13 @@ function renderAuditPagination() {
 }
 
 document.getElementById('audit-table-body').addEventListener('auditEventsLoaded', renderAuditPagination);
+
+document.getElementById('verify-chain-btn').addEventListener('click', verifyChain);
+document.getElementById('export-menu-btn').addEventListener('click', function() {
+    var menu = document.getElementById('export-menu');
+    var hidden = menu.classList.toggle('hidden');
+    this.setAttribute('aria-expanded', String(!hidden));
+});
+document.getElementById('export-csv-btn').addEventListener('click', function() { exportAudit('csv'); });
+document.getElementById('export-json-btn').addEventListener('click', function() { exportAudit('json'); });
 </script>
