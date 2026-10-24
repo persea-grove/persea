@@ -6469,7 +6469,25 @@ fn map_sqlx_err(e: sqlx::Error) -> rusqlite::Error {
 }
 
 type PoolBoxed = Box<dyn std::any::Any + Send>;
-type PoolJobResult = Result<PoolBoxed, PoolBoxed>;
+
+/// Why a job failed. Keeping a panic separate from a typed store error lets
+/// the worker report it to the caller instead of dying with the thread.
+enum PoolJobFailure {
+    Error(PoolBoxed),
+    Panicked(String),
+}
+
+type PoolJobResult = Result<PoolBoxed, PoolJobFailure>;
+
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic".to_string()
+    }
+}
 
 /// Store-call error types must be constructible when the worker thread is
 /// unreachable so fail-closed behavior is possible in every caller.
@@ -6553,8 +6571,19 @@ pub fn set_active_pool(pool: DbPool) -> Result<(), DbPool> {
                 }
             };
             while let Ok(job) = rx.recv() {
-                let result = rt.block_on(async move { (job.run)(leaked_pool).await });
-                let _ = job.done.send(result);
+                let PoolJob { run, done } = job;
+                // A panic in query code (for example a row-type mismatch)
+                // must not take the worker thread down with it: report it
+                // to the waiting caller and keep serving the next job.
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    rt.block_on(async move { run(leaked_pool).await })
+                }));
+                let outcome = match result {
+                    Ok(Ok(v)) => Ok(v),
+                    Ok(Err(e)) => Err(e),
+                    Err(payload) => Err(PoolJobFailure::Panicked(panic_message(payload))),
+                };
+                let _ = done.send(outcome);
             }
         });
     match worker {
@@ -6668,7 +6697,7 @@ where
         Box::pin(async move {
             match f(pool).await {
                 Ok(v) => Ok(Box::new(v) as PoolBoxed),
-                Err(e) => Err(Box::new(e) as PoolBoxed),
+                Err(e) => Err(PoolJobFailure::Error(Box::new(e) as PoolBoxed)),
             }
         })
     });
@@ -6683,9 +6712,12 @@ where
         Ok(boxed) => Ok(*boxed
             .downcast::<T>()
             .expect("db worker result type mismatch (store bug)")),
-        Err(boxed) => Err(*boxed
+        Err(PoolJobFailure::Error(boxed)) => Err(*boxed
             .downcast::<E>()
             .expect("db worker error type mismatch (store bug)")),
+        Err(PoolJobFailure::Panicked(msg)) => Err(E::from_store_failure(&format!(
+            "database query panicked: {msg}"
+        ))),
     }
 }
 
