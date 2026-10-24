@@ -2069,6 +2069,15 @@
     function maybePromptConnect(scope, folder, entry) {
         var list = entriesByFolder.get(folderKey(scope, folder)) || [];
         var e = findByName(list, entry);
+        // Web, VDI and Proxmox entries do not authenticate with the target
+        // via username/password (a browser session has no login target; VDI
+        // uses container credentials; Proxmox uses an API token), so the
+        // prompt would reject an empty form and block the connection.
+        var type = (e && e.session_type) || '';
+        if (type === 'web' || type === 'vdi' || type === 'proxmox') {
+            connectEntry(scope, folder, entry);
+            return;
+        }
         if (e && e.has_credentials) { connectEntry(scope, folder, entry); return; }
         fetch('/api/me/preset-credentials', { headers: apiHeaders(), credentials: 'same-origin' })
             .then(function(r) { return r.ok ? r.json() : null; })
