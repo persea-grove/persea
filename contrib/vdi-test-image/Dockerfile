@@ -6,6 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xrdp \
     xorgxrdp \
+    xauth \
     xserver-xorg \
     xfce4 \
     xfce4-terminal \

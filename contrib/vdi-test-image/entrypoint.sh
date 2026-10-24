@@ -14,7 +14,7 @@ echo "$USERNAME:$PASSWORD" | chpasswd
 
 # Set default session to xfce4
 echo "xfce4-session" > /home/"$USERNAME"/.xsession
-chown "$USERNAME":"$USERNAME" /home/"$USERNAME"/.xsession
+chown -R "$USERNAME":"$USERNAME" /home/"$USERNAME"
 
 # Ensure xrdp TLS certs are configured
 sed -i \
