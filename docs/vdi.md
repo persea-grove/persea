@@ -43,6 +43,8 @@ enabled = true
 # default_cpu_limit = 2.0                     # cores, 0 = no limit
 # default_memory_limit = 2048                 # MB, 0 = no limit
 # ready_timeout_secs = 30                     # how long to wait for xrdp to start
+# endpoint_host = "192.0.2.10"                # address that reaches Docker's published
+#                                             # VDI RDP port (default: 127.0.0.1)
 # port_range_start = 39000                    # optional: restrict the localhost RDP port range
 # port_range_end = 39999                      # (unset = Docker picks any free port)
 # container_hook_script = "/opt/persea/vdi-container-hook.sh"
@@ -53,6 +55,22 @@ enabled = true
 ```
 
 VDI can also be toggled from **Admin → Settings**: the `enable_vdi` switch gates the feature (default: on). Sessions are refused while either the setting or `[vdi] enabled` is off.
+
+### Running persea in Docker
+
+When persea runs in a container with VDI enabled:
+
+- Mount the Docker socket: `-v /var/run/docker.sock:/var/run/docker.sock`
+- Let the persea process use it by adding the container user to the host's docker group (`--group-add <docker-gid>`, or `group_add` in compose). Debian-family images can bake the group in with a build-time `PGID` build arg.
+- Set `[vdi] endpoint_host` to an address that reaches the Docker host from inside the container, such as the host's LAN IP or the compose network gateway. Docker publishes each VDI RDP port on the Docker host. The persea container's own loopback does not lead there, so the default `127.0.0.1` cannot reach it.
+
+```toml
+[vdi]
+enabled = true
+endpoint_host = "192.0.2.10"
+```
+
+With a non-loopback `endpoint_host`, the VDI RDP port is published on `0.0.0.0` on the Docker host. Restrict it with a firewall or `port_range_start` / `port_range_end`.
 
 ## Docker image requirements
 

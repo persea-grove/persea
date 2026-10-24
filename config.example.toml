@@ -414,6 +414,12 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # default_cpu_limit = 1.0               # CPU cores (Docker --cpus)
 # default_memory_limit = 512            # Memory limit in MB (Docker --memory)
 # ready_timeout_secs = 30               # max wait for container ready
+# endpoint_host = "192.0.2.10"         # address that reaches Docker's published
+#                                       # VDI RDP port (default: 127.0.0.1).
+#                                       # Leave unset for a host install; when
+#                                       # persea runs in a container, set it to
+#                                       # the host's LAN IP or the compose
+#                                       # network gateway.
 # idle_timeout_mins = 60                # destroy after idle period
 # allowed_images = []                    # empty = allow all images
 # home_base = "/opt/persea/vdi"        # base dir for user home mounts

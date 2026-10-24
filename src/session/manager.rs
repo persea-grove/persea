@@ -257,6 +257,7 @@ impl SessionManager {
             Ok(driver) => {
                 let mut driver = driver
                     .with_ready_timeout(vdi_cfg.ready_timeout_secs)
+                    .with_endpoint_host(vdi_cfg.endpoint_host.clone())
                     .with_container_hook(
                         vdi_cfg.container_hook_script.clone(),
                         vdi_cfg.container_hook_timeout_secs,

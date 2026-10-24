@@ -704,6 +704,7 @@ setup.
 | `default_cpu_limit` | float | `0` | Default CPU limit for containers (fractional cores, e.g. `2.0`). `0` = no limit. |
 | `default_memory_limit` | integer | `0` | Default memory limit in MB. `0` = no limit. |
 | `ready_timeout_secs` | integer | `30` | Seconds to wait for xrdp to become ready in a new container. |
+| `endpoint_host` | string | `127.0.0.1` | Address that reaches Docker's published VDI RDP port. Keep the default on a host install; set it when persea runs in a container. |
 | `port_range_start` | integer | *(none)* | First localhost port Docker may bind VDI RDP to. Must be set together with `port_range_end`; unset, Docker picks any random port. |
 | `port_range_end` | integer | *(none)* | Last localhost port Docker may bind VDI RDP to. |
 | `container_hook_script` | string | *(none)* | Optional hook script, called as `<script> up <port> <container_id> <container_name>` before readiness checks and `<script> down <port> <container_id> <container_name>` before removal. |

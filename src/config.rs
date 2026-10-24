@@ -341,6 +341,11 @@ pub struct VdiConfig {
     /// Seconds to wait for xrdp to become ready in a new container. Default: 30.
     #[serde(default = "default_ready_timeout_secs")]
     pub ready_timeout_secs: u64,
+    /// Address that reaches Docker's published VDI RDP port. Default: "127.0.0.1".
+    /// Set this when persea runs in a container: the port lives on the Docker
+    /// host, and the persea container's own loopback does not lead there.
+    #[serde(default)]
+    pub endpoint_host: Option<String>,
     /// First localhost port Docker may bind VDI RDP to. Unset = Docker chooses any random port.
     #[serde(default)]
     pub port_range_start: Option<u16>,

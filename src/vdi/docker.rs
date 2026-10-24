@@ -20,6 +20,7 @@ pub struct DockerDriver {
     client: Docker,
     ready_timeout: Duration,
     host_port_range: Option<(u16, u16)>,
+    endpoint_host: String,
     container_hook_script: Option<String>,
     container_hook_timeout: Duration,
 }
@@ -38,6 +39,7 @@ impl DockerDriver {
             client,
             ready_timeout: Duration::from_secs(30),
             host_port_range: None,
+            endpoint_host: "127.0.0.1".into(),
             container_hook_script: None,
             container_hook_timeout: Duration::from_secs(10),
         })
@@ -47,6 +49,40 @@ impl DockerDriver {
     pub fn with_ready_timeout(mut self, secs: u64) -> Self {
         self.ready_timeout = Duration::from_secs(secs);
         self
+    }
+
+    /// Address that reaches Docker's published VDI RDP port. Empty or unset
+    /// keeps the loopback default, which only works when persea and Docker
+    /// share a host.
+    pub fn with_endpoint_host(mut self, host: Option<String>) -> Self {
+        self.endpoint_host = Self::resolve_endpoint_host(host.as_deref()).to_string();
+        self
+    }
+
+    /// Resolve the configured endpoint host, falling back to loopback.
+    fn resolve_endpoint_host(configured: Option<&str>) -> &str {
+        configured
+            .map(str::trim)
+            .filter(|host| !host.is_empty())
+            .unwrap_or("127.0.0.1")
+    }
+
+    fn is_loopback_host(host: &str) -> bool {
+        host == "localhost"
+            || host
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
+    }
+
+    /// Docker host interface to publish the VDI RDP port on. Loopback keeps
+    /// the default deployment closed; when persea reaches the host through
+    /// another address, the port must be published beyond loopback too.
+    fn port_bind_host(endpoint_host: &str) -> &str {
+        if Self::is_loopback_host(endpoint_host) {
+            "127.0.0.1"
+        } else {
+            "0.0.0.0"
+        }
     }
 
     /// Restrict Docker's published host port for RDP to an inclusive range.
@@ -258,7 +294,7 @@ impl DockerDriver {
     ) -> Result<(), VdiError> {
         self.run_container_hook("up", port, container_id, container_name)
             .await?;
-        self.wait_for_ready("127.0.0.1", port).await
+        self.wait_for_ready(&self.endpoint_host, port).await
     }
 
     /// Extract the host-mapped port for container port 3389/tcp from inspect data.
@@ -289,11 +325,17 @@ impl DockerDriver {
 
         loop {
             if tokio::time::Instant::now() > deadline {
-                return Err(VdiError::Timeout(format!(
+                let mut message = format!(
                     "xrdp not ready on {} after {}s",
                     addr,
                     self.ready_timeout.as_secs()
-                )));
+                );
+                if Self::is_loopback_host(host) {
+                    message.push_str(
+                        "; if persea runs in a container, set [vdi] endpoint_host to an address that reaches the docker host",
+                    );
+                }
+                return Err(VdiError::Timeout(message));
             }
             match tokio::net::TcpStream::connect(&addr).await {
                 Ok(_) => {
@@ -473,7 +515,7 @@ impl DockerDriver {
                     return Ok(ContainerInfo {
                         container_id,
                         container_name,
-                        rdp_host: "127.0.0.1".into(),
+                        rdp_host: self.endpoint_host.clone(),
                         rdp_port: port,
                         reused: true,
                     });
@@ -539,7 +581,7 @@ impl DockerDriver {
                 Ok(ContainerInfo {
                     container_id,
                     container_name,
-                    rdp_host: "127.0.0.1".into(),
+                    rdp_host: self.endpoint_host.clone(),
                     rdp_port: port,
                     reused: true,
                 })
@@ -672,7 +714,7 @@ impl DockerDriver {
                     port_bindings.insert(
                         "3389/tcp".to_string(),
                         Some(vec![PortBinding {
-                            host_ip: Some("127.0.0.1".into()),
+                            host_ip: Some(Self::port_bind_host(&self.endpoint_host).into()),
                             host_port: Some(host_port.clone()),
                         }]),
                     );
@@ -757,7 +799,7 @@ impl DockerDriver {
                     return Ok(ContainerInfo {
                         container_id: created.id,
                         container_name,
-                        rdp_host: "127.0.0.1".into(),
+                        rdp_host: self.endpoint_host.clone(),
                         rdp_port: port,
                         reused: false,
                     });
@@ -1165,5 +1207,38 @@ mod tests {
                 "39003".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn endpoint_host_defaults_to_loopback() {
+        assert_eq!(DockerDriver::resolve_endpoint_host(None), "127.0.0.1");
+        assert_eq!(DockerDriver::resolve_endpoint_host(Some("  ")), "127.0.0.1");
+        assert_eq!(
+            DockerDriver::port_bind_host(DockerDriver::resolve_endpoint_host(None)),
+            "127.0.0.1"
+        );
+    }
+
+    #[test]
+    fn endpoint_host_flows_into_probe_and_published_endpoint() {
+        // The same value feeds the readiness probe and the returned rdp_host,
+        // and the published port has to leave loopback for the container to
+        // reach it.
+        let host = "192.0.2.10";
+        let driver = DockerDriver::new("/var/run/docker.sock")
+            .unwrap()
+            .with_endpoint_host(Some(host.into()));
+        assert_eq!(driver.endpoint_host, host);
+        assert_eq!(DockerDriver::resolve_endpoint_host(Some(host)), host);
+        assert_eq!(DockerDriver::port_bind_host(host), "0.0.0.0");
+    }
+
+    #[test]
+    fn loopback_detection_covers_ip_and_localhost() {
+        assert!(DockerDriver::is_loopback_host("127.0.0.1"));
+        assert!(DockerDriver::is_loopback_host("127.0.0.2"));
+        assert!(DockerDriver::is_loopback_host("::1"));
+        assert!(DockerDriver::is_loopback_host("localhost"));
+        assert!(!DockerDriver::is_loopback_host("192.0.2.10"));
     }
 }
