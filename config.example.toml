@@ -398,6 +398,9 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # max_disk_percent = 80              # delete oldest when disk usage exceeds % (0 = disable)
 # max_recordings = 1000              # global max recording count (0 = unlimited)
 # rotation_interval_secs = 300       # how often to check rotation (seconds, default: 300)
+# encrypt_at_rest = true             # encrypt finished recordings with the storage key
+#                                     # (default: on when a storage key is set). Files
+#                                     # become .guac.enc; playback decrypts with that key.
 
 # ─── VDI (Docker Container Sessions) ───────────────────────────────────────
 #

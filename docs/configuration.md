@@ -51,6 +51,9 @@ default SQLite file).
 | `site_title` | `Persea` | Title shown in the browser tab and page header. |
 | `instance_id` | `<hostname>-<pid>` | Stable name for this instance in a multi-instance (HA) fleet; marks which instance owns each live session. Must be unique across the fleet; set a fixed value per host if you run HA (see [High Availability](high-availability.md)). |
 | `ha_base_url` | *(unset)* | Public base URL of this instance (for example `https://persea-1.example.com`). The target of cross-instance join/shadow redirects in HA mode. See [High Availability](high-availability.md). |
+| `[desktop] allow_bridge` | `false` | Allow the Tauri desktop shell to reach this instance over remote IPC. When true, the page CSP `connect-src` additionally permits `tauri://localhost` and `http://ipc.localhost`, and the desktop bridge script is served on every page. Leave off for plain-browser deployments. |
+| `[updates] check_url` | GitHub Releases API for the persea repository | Release-list URL polled by the update checker. Point it at an internal mirror that serves a `/releases/latest` shape for air-gapped or proxied environments. |
+| `[updates] check_interval_hours` | `24` | Hours between update checks. Set `[updates] enabled = false` to make no network call at all. |
 
 ## Session limits and timeouts
 
@@ -71,6 +74,7 @@ session nobody is touching, or a session that has simply run too long.
 | `session_cleanup_delay_secs` | `300` | How long finished sessions stay in memory before cleanup. Does not affect the session history stored in the database. |
 | `session_history_retention_days` | `90` | How many days session history is kept in the database. `0` = keep forever. |
 | `shutdown_timeout_secs` | `30` | Graceful shutdown window: after SIGTERM/SIGINT the server stops accepting new connections and waits this long for active sessions to drain before forcing exit. |
+| `[session] reason_required` | `false` | Require a connection reason on every session creation, including the Connections page connect flow and ad-hoc sessions. When true, a request without a reason is rejected with HTTP 400; the reason is stored in session history and shown on the Sessions page and in reports. |
 
 ## Password policy
 
@@ -242,6 +246,7 @@ second factor can be layered on top of any primary method.
 | `radius` | - | RADIUS provider config (below). |
 | `saml` | - | SAML 2.0 provider config (below). |
 | `totp` | - | TOTP MFA second factor config (below). |
+| `pass_login_credentials` | `false` | When true, the password from a successful database, LDAP, RADIUS, or SAML login is stored encrypted and reused as a fallback for connection entries that carry no password of their own. OIDC logins have no password to reuse. Off by default because forwarding the login password to targets is sensitive. |
 
 Example, LDAP primary with TOTP MFA for everyone:
 ```toml
@@ -497,6 +502,7 @@ Rotation keeps disk usage in check by deleting the oldest recordings.
 | `typescript_path` | string | *(unset)* | Directory for SSH typescript (raw terminal text) files. Unset = disabled. See below. |
 | `typescript_name` | string | `{connection}-{user}-{date}-{time}` | Filename template for typescripts. Tokens listed below. |
 | `create_typescript_path` | bool | `false` | Let guacd create `typescript_path` if it does not exist. |
+| `encrypt_at_rest` | bool | auto | Encrypt recordings with the storage key. Unset means on when `[storage].encryption_key` is set and off otherwise; `true`/`false` forces it. See below. |
 
 ```toml
 [recording]
@@ -504,7 +510,16 @@ enabled = true
 max_disk_percent = 80
 max_recordings = 1000
 rotation_interval_secs = 300
+# encrypt_at_rest = true
 ```
+
+**Encryption at rest.** When enabled, the finished recording is renamed
+from `.guac` to `.guac.enc` and encrypted with the AES-256-GCM storage
+key (`[storage].encryption_key`, `PERSEA_STORAGE_KEY`). Playback decrypts
+it with the same key, so recordings become unreadable if that key is
+lost. The official Docker image always sets a storage key, so recording
+encryption is on by default there. Set `encrypt_at_rest = false` to keep
+plain `.guac` files (for example when another tool reads them directly).
 
 ### SSH typescript recording
 
