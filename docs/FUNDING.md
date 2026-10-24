@@ -20,4 +20,4 @@ Support the project on [Ko-Fi](https://ko-fi.com/barbelldwarf). Contributions pa
 
 - [Sponsor on GitHub Sponsors](https://github.com/sponsors/barbelldwarf) (one-time or recurring)
 - [Buy a coffee on Ko-Fi](https://ko-fi.com/barbelldwarf) (one-time or recurring)
-- Contribute code, docs, or bug reports: see [CONTRIBUTING.md](CONTRIBUTING.md) if present, and the [Contributor License Agreement (CLA.md)](CLA.md)
+- Contribute code, docs, or bug reports: see [CONTRIBUTING.md](../CONTRIBUTING.md) if present, and the [Contributor License Agreement (CLA.md)](../CLA.md)
