@@ -1390,6 +1390,13 @@ impl SessionManager {
             };
 
             let need_cdp = web.is_some_and(|s| s.login_script.is_some());
+            let allowed_domains = web.and_then(|s| s.allowed_domains.as_deref());
+            if allowed_domains.is_none_or(|d| d.iter().all(|h| h.trim().is_empty())) {
+                tracing::warn!(
+                    session_id = %session_id,
+                    "web session started with empty allowed_domains — all hosts blocked by host-rules"
+                );
+            }
 
             // Parse autofill credentials JSON and substitute placeholders
             let autofill_creds = parse_autofill_credentials(
@@ -1406,7 +1413,7 @@ impl SessionManager {
                     height,
                     need_cdp,
                     autofill_creds.as_deref(),
-                    web.and_then(|s| s.allowed_domains.as_deref()),
+                    allowed_domains,
                 )
                 .await
                 .map_err(|e| SessionError::BrowserSpawn(e.to_string()))?;
