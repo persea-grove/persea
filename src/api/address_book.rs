@@ -7216,5 +7216,61 @@ mod tests {
                 "{bad:?} must NOT be silently coerced"
             );
         }
+    #[tokio::test]
+    async fn update_entry_accepts_get_body_round_trip() {
+        let db = test_db();
+        let key = insert_test_admin(&db, "admin");
+        db::create_ab_folder(&db, "shared", "RoundTrip", "", "", false).unwrap();
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(json_req(
+                "POST",
+                "/api/addressbook/folders/shared/RoundTrip/entries",
+                &key,
+                json!({"name": "Round Trip", "type": "ssh", "hostname": "10.0.0.9"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        // Read the entry exactly as the list API returns it.
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(auth_req(
+                "GET",
+                "/api/addressbook/folders/shared/RoundTrip/entries",
+                &key,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let listed = body_json(response).await;
+        let mut entry = listed[0].clone();
+        assert_eq!(entry["session_type"], "ssh", "GET emits session_type");
+        // `name` is the API's display-name field on update (the slug comes
+        // from the URL), so change it here rather than `display_name`.
+        entry["name"] = json!("Renamed via GET body");
+
+        // PUT that same body back with one field changed: must not 422.
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(json_req(
+                "PUT",
+                "/api/addressbook/folders/shared/RoundTrip/entries/round-trip",
+                &key,
+                entry,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "PUT must accept the GET body (session_type alias)"
+        );
+
+        let folder = db::get_ab_folder(&db, "shared", "RoundTrip").unwrap();
+        let entries = db::list_ab_entries(&db, folder.id).unwrap();
+        assert_eq!(entries[0].display_name, "Renamed via GET body");
+    }
     }
 }

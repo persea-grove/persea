@@ -87,7 +87,9 @@ pub struct FolderConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AddressBookEntry {
     /// Protocol of the entry: "ssh", "rdp", "vnc", "spice", "web", or "vdi".
-    #[serde(rename = "type")]
+    /// `session_type` is accepted on input too: the address-book GET shape
+    /// emits that name, so a read-modify-write round-trip must parse.
+    #[serde(rename = "type", alias = "session_type")]
     pub session_type: String, // "ssh", "rdp", "vnc", "web"
     /// Target hostname or IP address.
     pub hostname: Option<String>,
