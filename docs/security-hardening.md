@@ -276,17 +276,22 @@ and **every** returned IP must match at least one allowed range.
 
 | Key | Default |
 |-----|---------|
-| `ssh_allowed_networks` | `["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "::1/128"]` |
-| `rdp_allowed_networks` | `["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "::1/128"]` |
-| `vnc_allowed_networks` | `["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "::1/128"]` |
+| `ssh_allowed_networks` | `["127.0.0.0/8", "::1/128"]` |
+| `rdp_allowed_networks` | `["127.0.0.0/8", "::1/128"]` |
+| `vnc_allowed_networks` | `["127.0.0.0/8", "::1/128"]` |
 | `web_allowed_networks` | `["127.0.0.0/8", "::1/128"]` |
 
-SSH/RDP/VNC can reach private networks plus loopback out of the box;
-web browser sessions are loopback-only by default. Tighten these to
-exactly what your users need:
+All four lists default to loopback only. A fresh Docker deployment
+therefore rejects non-loopback session targets until you add the ranges
+your users need to the relevant allowlist.
+
+Widen them to exactly what your users need:
 
 ```toml
 ssh_allowed_networks = ["127.0.0.0/8", "::1/128", "10.0.0.0/8"]
+rdp_allowed_networks = ["127.0.0.0/8", "::1/128", "10.0.0.0/8"]
+vnc_allowed_networks = ["127.0.0.0/8", "::1/128", "10.0.0.0/8"]
+web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 ```
 
 Web browser sessions have a second, complementary control: the
