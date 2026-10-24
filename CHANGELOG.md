@@ -5,6 +5,41 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `[vdi] endpoint_host` setting for containerized deployments: the address
+  that reaches Docker's published VDI RDP port when persea's own loopback
+  cannot.
+
+### Changed
+
+- Web entry `allowed_domains` is now editable in the entry form, with an
+  explicit warning while the list is empty. The server also logs a warning
+  when a web session starts with no allowed domains.
+
+### Fixed
+
+- Session reports and session history now run on both SQLite and
+  PostgreSQL instead of failing on PostgreSQL with SQLite-only SQL.
+- The database worker survives a failed query instead of taking every
+  subsequent database request down with it.
+- VDI container creation works on Docker Engine 29, which rejects the
+  legacy bind-mode string: home directories now use structured mounts.
+- Admin buttons (Verify Chain, Export, TOTP) work under the Content
+  Security Policy again.
+- Recording playback no longer stalls at 00:00 when Play is pressed before
+  the first frame; decode and load failures are reported in the player.
+- Web, VDI and Proxmox entries connect without a username/password prompt,
+  since those session types do not authenticate with the target that way.
+- The VDI test image sets `xauth` and home-directory ownership correctly
+  for bind-mounted homes.
+
+### Documentation
+
+- State the real connection allowlist defaults.
+
 ## [1.1.1] - 2026-08-29
 
 ### Security
@@ -45,14 +80,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - In multi-instance (HA) deployments, settings-flag changes propagate to
   other instances on their restart rather than immediately (#289)
 
-<!--
-Release checklist (delete this comment before tagging v1.1.1):
-- [ ] `cargo test` + `cargo fmt --check` green on the final commit
-- [ ] CI green for the final push (`gh run list`)
-- [ ] Tag `v1.1.1` (annotated) and push it
-- [ ] Release workflow green (deb/rpm/Windows artifacts, guacd pin untouched)
-- [ ] Push the beta image + beta pre-release (`gh workflow run beta.yml --ref main`) after the tag
--->
+## [1.1.0] - 2026-08-21
+
+Large UI and enterprise release: redesigned web UI, scoped API tokens,
+session credential forwarding, and PowerShell remoting over SSH.
+
+### Added
+
+- Redesigned connections page with a folder tree, details panel, inline
+  connect, and a consolidated search/view/action bar.
+- Left-rail navigation across the app, collapsible to icons, including the
+  Security and My Profile sections.
+- Tabbed admin settings (with a storage tab) and a dedicated Security
+  centre for lockouts, sessions, and audit verification.
+- Personal folders: users can organise their own connections.
+- In-place user editing and profile self-service (name, password change,
+  TOTP enrolment).
+- In-app documentation viewer for all guides, with heading anchors and a
+  collapsible nav.
+- Scoped API tokens: interactive logins can mint tokens limited to chosen
+  permissions and an expiry, with LDAP re-validation and a compliance mode
+  that forbids long-lived tokens.
+- Opt-in session credential forwarding (`[auth] forward_session_credentials`)
+  and classified authentication failures that prompt for credentials in
+  the web client.
+- PowerShell remoting over SSH for Windows targets.
+- Per-connection RDP security defaults.
+- Auto-size client resize matched to the local viewport.
+
+### Changed
+
+- LDAP login resolution now walks the configured auth chain, and group
+  memberships discovered at login are stored for RBAC.
+- Recording playback seeks directly to the requested position.
+
+### Fixed
+
+- SAML login button works with IdP-initiated login again.
+- Setup wizard no longer loops silently on validation failure.
+- A storage key is generated on first run, including the RPM post-install.
+- `csrf_token` cookie is set on `/api/auth/status`.
+- Recording seeks restore the display stream cleanly.
+- Docker documentation builds and `.deb` staging no longer fail.
 
 ## [1.0.2] - 2026-08-17
 
