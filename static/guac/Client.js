@@ -1204,6 +1204,12 @@ Guacamole.Client = function(tunnel) {
             if (object && object.onbody) {
                 var stream = streams[streamIndex] = new Guacamole.InputStream(guac_client, streamIndex);
                 object.onbody(stream, mimetype, name);
+
+                // Acknowledge receipt of the stream. Object streams are
+                // server-driven: guacd writes the first blob only after the
+                // client acks, so without this the stream stalls before any
+                // data arrives (SSH file browser stuck on "Loading").
+                stream.sendAck("OK", 0x0000);
             }
 
             // Otherwise, unsupported

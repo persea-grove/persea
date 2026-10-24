@@ -35,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   since those session types do not authenticate with the target that way.
 - The VDI test image sets `xauth` and home-directory ownership correctly
   for bind-mounted homes.
+- SSH SFTP file browser no longer hangs on "Loading": object streams are
+  now acknowledged, so directory listing, navigation and download work
+  (upload was already working).
 
 ### Documentation
 

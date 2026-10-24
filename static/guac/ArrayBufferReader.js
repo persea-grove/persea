@@ -65,6 +65,10 @@ Guacamole.ArrayBufferReader = function(stream) {
         if (guac_reader.ondata)
             guac_reader.ondata(arrayBuffer);
 
+        // Acknowledge receipt: server-driven streams (directory listings)
+        // only send the next blob after the client acks this one.
+        stream.sendAck("OK", 0x0000);
+
     };
 
     // Simply call onend when end received
