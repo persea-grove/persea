@@ -3226,7 +3226,7 @@ pub fn top_connections(db: &Db, limit: u32) -> rusqlite::Result<Vec<serde_json::
                 COUNT(*) AS session_count,
                 COALESCE(SUM(duration_secs), 0) AS total_secs
          FROM session_history
-         GROUP BY COALESCE(address_book_entry, hostname || ':' || COALESCE(port, 0))
+         GROUP BY name, address_book_entry, address_book_folder, session_type
          ORDER BY session_count DESC
          LIMIT ?1",
     )?;
@@ -3297,29 +3297,44 @@ pub fn session_summary(db: &Db) -> rusqlite::Result<serde_json::Value> {
     }))
 }
 
+/// Bucket a stored `started_at` (TEXT, `YYYY-MM-DD HH:MM:SS`) into its hour.
+/// Done in Rust so the histogram query stays dialect-neutral.
+fn hour_bucket(started_at: &str) -> Option<String> {
+    NaiveDateTime::parse_from_str(started_at, "%Y-%m-%d %H:%M:%S")
+        .ok()
+        .map(|dt| dt.format("%Y-%m-%d %H:00:00").to_string())
+}
+
+/// Lower bound for "the last N hours" in the stored text format.
+fn hours_ago_cutoff(hours: i32) -> String {
+    (Utc::now() - chrono::Duration::hours(hours.max(0) as i64))
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string()
+}
+
+/// Sorted hour buckets as the reports API expects them.
+fn hour_buckets_json(buckets: std::collections::BTreeMap<String, i64>) -> Vec<serde_json::Value> {
+    buckets
+        .into_iter()
+        .map(|(hour, count)| serde_json::json!({"hour": hour, "count": count}))
+        .collect()
+}
+
 /// Return session counts grouped by hour for the last N hours.
 pub fn session_activity_by_hour(db: &Db, hours: i32) -> rusqlite::Result<Vec<serde_json::Value>> {
     db_route!(db, session_activity_by_hour_pool, hours);
     let conn = db.lock().unwrap();
-    let mut stmt = conn.prepare(
-        "SELECT strftime('%Y-%m-%d %H:00:00', started_at) AS hour,
-                COUNT(*) AS count
-         FROM session_history
-         WHERE started_at >= datetime('now', ?1)
-         GROUP BY hour
-         ORDER BY hour ASC",
-    )?;
-    let modifier = format!("-{} hours", hours);
-    let rows = stmt
-        .query_map(rusqlite::params![modifier], |row| {
-            Ok(serde_json::json!({
-                "hour": row.get::<_, String>(0)?,
-                "count": row.get::<_, i64>(1)?,
-            }))
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
-    Ok(rows)
+    let mut stmt = conn.prepare("SELECT started_at FROM session_history WHERE started_at >= ?1")?;
+    let mut buckets: std::collections::BTreeMap<String, i64> = Default::default();
+    let rows = stmt.query_map(params![hours_ago_cutoff(hours)], |row| {
+        row.get::<_, String>(0)
+    })?;
+    for started_at in rows {
+        if let Some(hour) = hour_bucket(&started_at?) {
+            *buckets.entry(hour).or_insert(0) += 1;
+        }
+    }
+    Ok(hour_buckets_json(buckets))
 }
 
 /// Clean up old session history entries (retain last N days). Returns rows deleted.
@@ -4879,6 +4894,43 @@ mod tests {
         assert_eq!(top[0]["session_count"], 5);
         assert_eq!(top[1]["name"], "Host B");
         assert_eq!(top[1]["session_count"], 2);
+        // Every selected column is grouped, which Postgres requires.
+        assert_eq!(top[0]["folder"], "prod");
+        assert_eq!(top[0]["session_type"], "rdp");
+    }
+
+    #[test]
+    fn test_session_activity_by_hour_buckets_in_rust() {
+        let db = test_db();
+        for i in 0..3 {
+            insert_session_history(
+                &db,
+                &format!("h{}", i),
+                "ssh",
+                "h",
+                None,
+                "",
+                "u",
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        }
+        let buckets = session_activity_by_hour(&db, 24).unwrap();
+        let total: i64 = buckets.iter().map(|b| b["count"].as_i64().unwrap()).sum();
+        assert_eq!(total, 3);
+        assert!(buckets[0]["hour"].as_str().unwrap().ends_with(":00:00"));
+    }
+
+    #[test]
+    fn test_hour_bucket_parses_stored_timestamp() {
+        assert_eq!(
+            hour_bucket("2026-10-24 13:47:05").as_deref(),
+            Some("2026-10-24 13:00:00")
+        );
+        assert_eq!(hour_bucket("not-a-timestamp"), None);
     }
 
     #[test]
@@ -9522,9 +9574,9 @@ async fn top_connections_pool(
         "SELECT COALESCE(entry_display_name, hostname) AS name, \
                 address_book_entry, address_book_folder, session_type, \
                 COUNT(*) AS session_count, \
-                COALESCE(SUM(duration_secs), 0) AS total_secs \
+                COALESCE(SUM(duration_secs), 0)::bigint AS total_secs \
          FROM session_history \
-         GROUP BY COALESCE(address_book_entry, hostname || ':' || COALESCE(port::text, '0')) \
+         GROUP BY name, address_book_entry, address_book_folder, session_type \
          ORDER BY session_count DESC \
          LIMIT $1",
         "SELECT COALESCE(entry_display_name, hostname) AS name, \
@@ -9532,7 +9584,7 @@ async fn top_connections_pool(
                 COUNT(*) AS session_count, \
                 COALESCE(SUM(duration_secs), 0) AS total_secs \
          FROM session_history \
-         GROUP BY COALESCE(address_book_entry, hostname || ':' || COALESCE(port, 0)) \
+         GROUP BY name, address_book_entry, address_book_folder, session_type \
          ORDER BY session_count DESC \
          LIMIT ?"
     );
@@ -9561,10 +9613,10 @@ async fn top_connections_pool(
 async fn top_users_pool(pool: &DbPool, limit: u32) -> rusqlite::Result<Vec<serde_json::Value>> {
     let rows = match pool {
         DbPool::Postgres(p) => {
-            pg_fetch(p, "SELECT created_by, COUNT(*) AS session_count, COALESCE(SUM(duration_secs), 0) AS total_secs, MAX(started_at) AS last_session FROM session_history GROUP BY created_by ORDER BY session_count DESC LIMIT $1", &[Arg::I64(limit as i64)]).await
+            pg_fetch(p, "SELECT created_by, COUNT(*) AS session_count, COALESCE(SUM(duration_secs), 0)::bigint AS total_secs, MAX(started_at) AS last_session FROM session_history GROUP BY created_by ORDER BY session_count DESC LIMIT $1", &[Arg::I64(limit as i64)]).await
         }
         DbPool::MySQL(p) => {
-            mysql_fetch(p, "SELECT created_by, COUNT(*) AS session_count, COALESCE(SUM(duration_secs), 0) AS total_secs, MAX(started_at) AS last_session FROM session_history GROUP BY created_by ORDER BY session_count DESC LIMIT ?", &[Arg::I64(limit as i64)]).await
+            mysql_fetch(p, "SELECT created_by, COUNT(*) AS session_count, CAST(COALESCE(SUM(duration_secs), 0) AS SIGNED) AS total_secs, MAX(started_at) AS last_session FROM session_history GROUP BY created_by ORDER BY session_count DESC LIMIT ?", &[Arg::I64(limit as i64)]).await
         }
         DbPool::SQLite(p) => {
             sqlite_fetch(p, "SELECT created_by, COUNT(*) AS session_count, COALESCE(SUM(duration_secs), 0) AS total_secs, MAX(started_at) AS last_session FROM session_history GROUP BY created_by ORDER BY session_count DESC LIMIT ?", &[Arg::I64(limit as i64)]).await
@@ -9649,25 +9701,10 @@ async fn session_activity_by_hour_pool(
 ) -> rusqlite::Result<Vec<serde_json::Value>> {
     let sql = qsql!(
         pool,
-        "SELECT to_char(started_at, 'YYYY-MM-DD HH24:00:00') AS hour, COUNT(*) AS count \
-         FROM session_history \
-         WHERE started_at >= to_char((now() at time zone 'utc') - make_interval(hours => $1::int), 'YYYY-MM-DD HH24:MI:SS') \
-         GROUP BY hour ORDER BY hour ASC",
-        "SELECT strftime('%Y-%m-%d %H:00:00', started_at) AS hour, COUNT(*) AS count \
-         FROM session_history \
-         WHERE started_at >= datetime('now', ?) \
-         GROUP BY hour ORDER BY hour ASC"
+        "SELECT started_at FROM session_history WHERE started_at >= $1",
+        "SELECT started_at FROM session_history WHERE started_at >= ?"
     );
-    let mysql_sql =
-        "SELECT DATE_FORMAT(started_at, '%Y-%m-%d %H:00:00') AS hour, COUNT(*) AS count \
-         FROM session_history \
-         WHERE started_at >= DATE_FORMAT(UTC_TIMESTAMP() - INTERVAL ? HOUR, '%Y-%m-%d %H:%i:%s') \
-         GROUP BY hour ORDER BY hour ASC";
-    let (sql, args) = match pool {
-        DbPool::MySQL(_) => (mysql_sql, vec![Arg::I64(hours as i64)]),
-        DbPool::Postgres(_) => (sql, vec![Arg::I64(hours as i64)]),
-        _ => (sql, vec![Arg::Str(format!("-{} hours", hours))]),
-    };
+    let args = vec![Arg::Str(hours_ago_cutoff(hours))];
     let rows = match pool {
         DbPool::Postgres(p) => pg_fetch(p, sql, &args).await,
         DbPool::MySQL(p) => mysql_fetch(p, sql, &args).await,
@@ -9675,15 +9712,13 @@ async fn session_activity_by_hour_pool(
         DbPool::None => return Err(no_pool_err()),
     }
     .map_err(map_sqlx_err)?;
-    Ok(rows
-        .iter()
-        .map(|row| {
-            serde_json::json!({
-                "hour": row.get::<String>(0),
-                "count": row.get::<i64>(1),
-            })
-        })
-        .collect())
+    let mut buckets: std::collections::BTreeMap<String, i64> = Default::default();
+    for row in &rows {
+        if let Some(hour) = hour_bucket(&row.get::<String>(0)) {
+            *buckets.entry(hour).or_insert(0) += 1;
+        }
+    }
+    Ok(hour_buckets_json(buckets))
 }
 
 async fn cleanup_session_history_pool(pool: &DbPool, retain_days: u32) -> rusqlite::Result<usize> {
