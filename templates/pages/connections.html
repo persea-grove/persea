@@ -373,6 +373,12 @@
                         <input type="text" id="em-url" class="form-input" placeholder="https://10.0.1.5:8080" autocomplete="off">
                         <p class="text-xs text-[var(--text-muted)] mt-1">Required for Web entries — the browser session opens this URL.</p>
                     </div>
+                    <div id="em-allowed-domains-field" class="span-2" style="display:none">
+                        <label class="form-label" for="em-allowed-domains">Allowed domains — web sessions can only visit these; empty = nothing loads</label>
+                        <textarea id="em-allowed-domains" class="form-input" rows="2" placeholder="example.com, *.example.org" autocomplete="off"></textarea>
+                        <p class="text-xs text-[var(--text-muted)] mt-1">Comma- or newline-separated. A domain also allows its subdomains. localhost and link-local addresses stay blocked.</p>
+                        <p id="em-allowed-domains-warning" class="hidden text-xs mt-1" role="status" style="color:#f0c040">No domains allowed — every site will fail with DNS_PROBE_FINISHED_NXDOMAIN. Add at least one domain.</p>
+                    </div>
                     <div id="em-container-field" class="span-2" style="display:none">
                         <label class="form-label" for="em-container-image">Container image</label>
                         <input type="text" id="em-container-image" class="form-input" placeholder="registry.example.com/desktop:latest" autocomplete="off">
@@ -2677,11 +2683,21 @@
         var el = document.getElementById('em-type-help');
         if (el) el.innerHTML = entryTypeHelp[type] || '';
     }
+    function updateAllowedDomainsWarning() {
+        var warning = document.getElementById('em-allowed-domains-warning');
+        var input = document.getElementById('em-allowed-domains');
+        if (!warning || !input) return;
+        var type = document.getElementById('em-type').value;
+        var empty = input.value.trim() === '';
+        warning.classList.toggle('hidden', !(type === 'web' && empty));
+    }
     function updateEntryTypeFields() {
         var type = document.getElementById('em-type').value;
         function show(id, on) { var el = document.getElementById(id); if (el) el.style.display = on ? '' : 'none'; }
         show('em-container-password-field', type === 'vdi');
         show('em-url-field', type === 'web');
+        show('em-allowed-domains-field', type === 'web');
+        updateAllowedDomainsWarning();
         show('em-container-field', type === 'vdi');
         show('em-powershell-field', type === 'powershell');
         show('em-proxmox-fields', type === 'proxmox');
@@ -2707,7 +2723,7 @@
     }
     function clearEntryFields() {
         portAutoSet = false;
-        var ids = ['em-description', 'em-hostname', 'em-port', 'em-username', 'em-password', 'em-private-key', 'em-proxmox-token-secret', 'em-container-password', 'em-url', 'em-container-image', 'em-powershell-binary', 'em-proxmox-url', 'em-proxmox-vmid', 'em-proxmox-node', 'em-proxmox-token-id', 'em-rdp-kdc-url', 'em-rdp-domain', 'em-remote-app'];
+        var ids = ['em-description', 'em-hostname', 'em-port', 'em-username', 'em-password', 'em-private-key', 'em-proxmox-token-secret', 'em-container-password', 'em-url', 'em-allowed-domains', 'em-container-image', 'em-powershell-binary', 'em-proxmox-url', 'em-proxmox-vmid', 'em-proxmox-node', 'em-proxmox-token-id', 'em-rdp-kdc-url', 'em-rdp-domain', 'em-remote-app'];
         for (var i = 0; i < ids.length; i++) { var el = document.getElementById(ids[i]); if (el) el.value = ''; }
         var pwEl = document.getElementById('em-password');
         if (pwEl) pwEl.placeholder = '';
@@ -2889,6 +2905,8 @@
         // Protocol-specific fields (edit mode): prefilled, type locked.
         updateEntryTypeFields();
         document.getElementById('em-url').value = selectedEntry.url || '';
+        document.getElementById('em-allowed-domains').value = (selectedEntry.allowed_domains || []).join(', ');
+        updateAllowedDomainsWarning();
         document.getElementById('em-container-image').value = selectedEntry.container_image || '';
         document.getElementById('em-powershell-binary').value = selectedEntry.powershell_binary || 'pwsh.exe';
         var pveUrlEl = document.getElementById('em-proxmox-url');
@@ -3054,6 +3072,12 @@
                 return;
             }
             entry.url = url;
+            // Always sent (may be empty): the server merges protocol_config,
+            // so an emptied list must replace the stored allowlist.
+            entry.allowed_domains = document.getElementById('em-allowed-domains').value
+                .split(/[\s,]+/)
+                .map(function(d) { return d.trim(); })
+                .filter(function(d) { return d !== ''; });
         }
         if (type === 'vdi') {
             var image = document.getElementById('em-container-image').value.trim();
@@ -3808,6 +3832,7 @@
 
     document.getElementById('em-cancel').addEventListener('click', function() { closeModal('entry-modal'); });
     document.getElementById('em-save').addEventListener('click', saveEntry);
+    document.getElementById('em-allowed-domains').addEventListener('input', updateAllowedDomainsWarning);
     document.getElementById('em-name').addEventListener('input', updateIdentifierPreview);
     document.getElementById('em-password-generate').addEventListener('click', function() {
         document.getElementById('em-password').value = generatePassword();
