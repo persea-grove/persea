@@ -7,11 +7,11 @@
     --bg-card: #1a2332;
     --bg-input: #1e293b;
     --bg-hover: #253040;
-    --border: #2a3548;
+    --border: #334155;
     --border-focus: #10b981;
     --text-primary: #f1f5f9;
-    --text-secondary: #94a3b8;
-    --text-muted: #64748b;
+    --text-secondary: #cbd5e1;
+    --text-muted: #94a3b8;
     --accent: #10b981;
     --accent-hover: #059669;
     /* --primary is written by theme.js (presets/admin branding); keep a
@@ -24,6 +24,22 @@
     --info-hover: #1d4ed8;
     --danger: #ef4444;
     --danger-bg: rgba(239,68,68,0.08);
+    /* ── Theme-aware contrast tokens ─────────────────────────────
+       A single accent/danger value cannot serve both as a fill (white
+       text on top) and as text on a surface: #10b981 is 2.54:1 under
+       white and 2.42:1 on white. These tokens carry the mode-correct
+       foregrounds. Components must use them instead of --accent /
+       --danger when the colour is the text. */
+    --accent-text: #34d399;      /* 7.9:1 on --bg-card (dark) */
+    --danger-text: #f87171;      /* 5.71:1 on --bg-card */
+    --success-text: #34d399;
+    --warning-text: #fbbf24;
+    --info-text: #93c5fd;
+    --purple-text: #c084fc;
+    --border-strong: #334155;    /* visible card/table structure */
+    --btn-primary-bg: #10b981;
+    --btn-primary-fg: #052e16;   /* dark text on bright emerald */
+    --btn-primary-bg-hover: #34d399;
     --radius: 10px;
     --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
@@ -47,11 +63,10 @@
     --border: #e2e8f0;
     --border-focus: #10b981;
     --text-primary: #1e293b;
-    --text-secondary: #64748b;
-    /* slate-600: one step darker than the dark theme's muted so placeholder
-       and helper text clears WCAG AA on light backgrounds (slate-500 is
-       ~4.4:1 on the card, just under the 4.5:1 small-text threshold). */
-    --text-muted: #475569;
+    --text-secondary: #475569;
+    /* slate-600: placeholder and helper text clears WCAG AA on white
+       (slate-500 is ~4.4:1) while staying visually weaker than secondary. */
+    --text-muted: #64748b;
     --accent: #10b981;
     --accent-hover: #059669;
     --primary: #10b981;
@@ -60,6 +75,17 @@
     --info-hover: #1e40af;
     --danger: #ef4444;
     --danger-bg: rgba(239,68,68,0.08);
+    /* Light-mode contrast tokens: darker foregrounds on white surfaces. */
+    --accent-text: #047857;      /* 5.48:1 on white */
+    --danger-text: #b91c1c;      /* 6.47:1 on white */
+    --success-text: #047857;
+    --warning-text: #92400e;
+    --info-text: #1d4ed8;
+    --purple-text: #6d28d9;
+    --border-strong: #cbd5e1;
+    --btn-primary-bg: #047857;   /* 5.48:1 under white */
+    --btn-primary-fg: #ffffff;
+    --btn-primary-bg-hover: #065f46;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -450,14 +476,14 @@ body {
 }
 
 .btn-primary {
-    background: var(--accent);
-    color: white;
+    background: var(--btn-primary-bg);
+    color: var(--btn-primary-fg);
 }
 
 .btn-block { width: 100%; }
 
 .btn-primary:hover {
-    background: var(--accent-hover);
+    background: var(--btn-primary-bg-hover);
     box-shadow: 0 4px 12px rgba(16,185,129,0.25);
 }
 
@@ -474,8 +500,8 @@ body {
 
 .btn-danger {
     background: var(--danger-bg);
-    color: var(--danger);
-    border: 1px solid rgba(239,68,68,0.2);
+    color: var(--danger-text);
+    border: 1px solid rgba(239,68,68,0.25);
 }
 
 .btn-danger:hover {
@@ -1521,3 +1547,91 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
     outline: 2px solid #ffffff;
     outline-offset: 2px;
 }
+
+/* ── Badges, notices and accent links ─────────────────────────────
+   One system for every little coloured label. Before this, templates
+   carried 46 inline Tailwind palettes (bg-blue-900/50 text-blue-300 …)
+   that are dark-mode-only: composited on a white card, "operator" came
+   out at 1.51:1 and the success badge at 1.72:1. Tones are defined per
+   mode here, so a badge is legible in both themes by construction. */
+
+.badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 6px;
+    border: 1px solid;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.45;
+    white-space: nowrap;
+}
+.badge-sm { padding: 1px 6px; font-size: 10px; border-radius: 5px; }
+
+.badge-success { color: var(--success-text); background: rgba(16,185,129,0.12); border-color: rgba(16,185,129,0.35); }
+.badge-warning { color: var(--warning-text); background: rgba(245,158,11,0.14); border-color: rgba(245,158,11,0.38); }
+.badge-danger  { color: var(--danger-text);  background: rgba(239,68,68,0.12);  border-color: rgba(239,68,68,0.35); }
+.badge-info    { color: var(--info-text);    background: rgba(59,130,246,0.12); border-color: rgba(59,130,246,0.35); }
+.badge-purple  { color: var(--purple-text);  background: rgba(168,85,247,0.12); border-color: rgba(168,85,247,0.35); }
+.badge-neutral { color: var(--text-secondary); background: var(--bg-input);     border-color: var(--border-strong); }
+
+/* Role badges: semantic aliases so templates never pick raw colours. */
+.badge-role-admin     { color: var(--text-primary);   background: var(--bg-hover); border-color: var(--border-strong); }
+.badge-role-poweruser { color: var(--warning-text);   background: rgba(245,158,11,0.14); border-color: rgba(245,158,11,0.38); }
+.badge-role-operator  { color: var(--info-text);      background: rgba(59,130,246,0.12); border-color: rgba(59,130,246,0.35); }
+.badge-role-viewer    { color: var(--text-secondary); background: var(--bg-input); border-color: var(--border-strong); }
+.badge-role-custom    { color: var(--purple-text);    background: rgba(168,85,247,0.12); border-color: rgba(168,85,247,0.35); }
+
+/* Inline result boxes (save/test feedback). */
+.notice {
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid;
+    font-size: 13px;
+    line-height: 1.5;
+}
+.notice-success { color: var(--success-text); background: rgba(16,185,129,0.10); border-color: rgba(16,185,129,0.30); }
+.notice-error   { color: var(--danger-text);  background: rgba(239,68,68,0.10);  border-color: rgba(239,68,68,0.30); }
+.notice-info    { color: var(--info-text);    background: rgba(59,130,246,0.10); border-color: rgba(59,130,246,0.30); }
+
+/* Accent/danger text: links, folder names, "Active"-style state text. */
+.accent-text { color: var(--accent-text); }
+.link-accent { color: var(--accent-text); text-decoration: none; }
+.link-accent:hover { text-decoration: underline; }
+.link-danger { color: var(--danger-text); text-decoration: none; }
+.link-danger:hover { text-decoration: underline; }
+
+/* Status pills, previously duplicated per page (connections.html had no
+   light-mode overrides at all, so EXPIRED sat at 2.19:1 on white). */
+.status-pill {
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 500;
+    border-radius: 6px;
+    border: 1px solid;
+}
+.status-pill.status-active      { background: rgba(52,211,153,0.12); color: #34d399; border-color: rgba(52,211,153,0.3); }
+.status-pill.status-pending     { background: rgba(240,192,64,0.12); color: #f0c040; border-color: rgba(240,192,64,0.3); }
+.status-pill.status-disconnected{ background: rgba(96,165,250,0.12); color: #60a5fa; border-color: rgba(96,165,250,0.3); }
+.status-pill.status-logged_out  { background: rgba(233,69,96,0.12);  color: #f87171; border-color: rgba(233,69,96,0.3); }
+.status-pill.status-completed,
+.status-pill.status-expired,
+.status-pill.status-error       { background: rgba(107,114,128,0.12); color: #9ca3af; border-color: rgba(107,114,128,0.3); }
+.light .status-pill.status-active      { color: #047857; border-color: rgba(4,120,87,0.4); }
+.light .status-pill.status-pending     { color: #92400e; border-color: rgba(146,64,14,0.4); }
+.light .status-pill.status-disconnected{ color: #1d4ed8; border-color: rgba(29,78,216,0.4); }
+.light .status-pill.status-logged_out  { color: #b91c1c; border-color: rgba(185,28,28,0.4); }
+.light .status-pill.status-completed,
+.light .status-pill.status-expired,
+.light .status-pill.status-error       { color: #475569; border-color: rgba(71,85,105,0.4); }
+
+/* Scrollbars follow the theme (the default light bar on a dark strip was
+   a bright white band). */
+body, .recent-strip, .recent-modal-list, .conn-sidebar, .toc-panel, .table-wrap {
+    scrollbar-color: var(--border-strong) transparent;
+    scrollbar-width: thin;
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 6px; border: 2px solid transparent; background-clip: content-box; }
