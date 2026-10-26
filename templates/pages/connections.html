@@ -54,7 +54,7 @@
     </div>
 
     <!-- Vault unavailable warning (hidden by default) -->
-    <div id="vault-unavailable" class="hidden" role="alert" aria-live="polite" style="padding:12px 16px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:8px;color:#fbbf24;font-size:13px;margin-bottom:20px">
+    <div id="vault-unavailable" class="hidden" role="alert" aria-live="polite" style="padding:12px 16px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:8px;color:var(--warning-text);font-size:13px;margin-bottom:20px">
         <strong>Connections temporarily unavailable.</strong> Cannot reach the Vault server or database. Retrying automatically.
     </div>
 
@@ -131,7 +131,7 @@
                 <div id="entries-header" class="hidden" style="margin-bottom:16px">
                     <div style="display:flex;align-items:center;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
                         <h2 id="entries-title" style="font-size:16px;font-weight:600;color:var(--text-primary);margin:0"></h2>
-                        <span id="entries-personal-badge" class="hidden" style="padding:2px 8px;background:rgba(16,185,129,0.12);color:#34d399;font-size:11px;border-radius:12px">Personal</span>
+                        <span id="entries-personal-badge" class="hidden" style="padding:2px 8px;background:rgba(16,185,129,0.12);color:var(--accent-text);font-size:11px;border-radius:12px">Personal</span>
                         <span id="entries-count" style="padding:2px 8px;background:var(--bg-input);color:var(--text-muted);font-size:11px;border-radius:12px"></span>
                         <span id="entries-desc" style="font-size:13px;color:var(--text-muted);font-style:italic"></span>
                         <div style="flex:1"></div>
@@ -154,7 +154,7 @@
                     <div id="detail-description" class="hidden" style="margin-bottom:16px;padding:10px 12px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;font-size:13px;color:var(--text-primary);white-space:pre-wrap;word-break:break-word"></div>
                     <button id="detail-connect" class="btn btn-primary" style="width:100%;margin-bottom:16px">Connect</button>
                     <button id="detail-add-to-folder" class="btn btn-secondary btn-sm" style="width:100%;margin-bottom:16px">Add to personal folder</button>
-                    <div id="detail-pf-note" class="hidden" role="alert" aria-live="polite" style="padding:10px 14px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:8px;color:#fbbf24;font-size:13px;margin-bottom:16px"></div>
+                    <div id="detail-pf-note" class="hidden" role="alert" aria-live="polite" style="padding:10px 14px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:8px;color:var(--warning-text);font-size:13px;margin-bottom:16px"></div>
                     <!-- Reason is secondary to Connect: smaller label, muted
                          color and tighter spacing so it reads as an optional
                          annotation rather than a fifth stacked zone. -->
@@ -174,11 +174,11 @@
                         </select>
                         <input type="text" id="detail-reason" class="form-input" style="padding:8px 12px" placeholder="Free text (optional)" maxlength="500" autocomplete="off">
                     </div>
-                    <button id="detail-rotate-cred" class="btn btn-sm admin-only" style="width:100%;margin-bottom:16px;background:rgba(245,158,11,0.12);color:#fbbf24;border:1px solid rgba(245,158,11,0.3);display:none">
+                    <button id="detail-rotate-cred" class="btn btn-sm admin-only" style="width:100%;margin-bottom:16px;background:rgba(245,158,11,0.12);color:var(--warning-text);border:1px solid rgba(245,158,11,0.3);display:none">
                         <svg style="width:14px;height:14px;vertical-align:middle;margin-right:4px" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H4.598a.75.75 0 00-.75.75v3.634a.75.75 0 001.5 0v-2.033l.312.311a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm1.23-8.243a.75.75 0 00.219-.53V3.253a.75.75 0 00-1.5 0V5.23l-.312-.312A7 7 0 003.398 8.073a.75.75 0 101.449.39A5.5 5.5 0 0114.5 5.648l.312.311h-2.433a.75.75 0 000 1.5h3.634a.75.75 0 00.53-.219z" clip-rule="evenodd"/></svg>
                         Rotate Credential
                     </button>
-                    <div id="detail-error" class="hidden" role="alert" aria-live="polite" style="padding:10px 14px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:8px;color:#f87171;font-size:13px;margin-bottom:16px"></div>
+                    <div id="detail-error" class="hidden" role="alert" aria-live="polite" style="padding:10px 14px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:8px;color:var(--danger-text);font-size:13px;margin-bottom:16px"></div>
                     <div id="detail-details"></div>
                     <div id="detail-sessions" class="hidden" style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px">
                         <h2 style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:12px">Active Sessions</h2>
@@ -198,7 +198,7 @@
             <div style="flex:1"></div>
             <button id="btn-vsphere-refresh" class="btn btn-secondary btn-sm">Refresh</button>
         </div>
-        <div id="vsphere-error" class="hidden" role="alert" style="padding:12px 16px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:8px;color:#f87171;font-size:13px;margin-bottom:16px"></div>
+        <div id="vsphere-error" class="hidden" role="alert" style="padding:12px 16px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:8px;color:var(--danger-text);font-size:13px;margin-bottom:16px"></div>
         <div id="vsphere-empty" class="hidden" style="text-align:center;padding:32px 0;color:var(--text-muted);font-size:13px">No virtual machines found in vCenter.</div>
         <div id="vsphere-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(340px,100%),1fr));gap:12px"></div>
     </div>
@@ -253,7 +253,7 @@
                 Inherit permissions from parent folder
             </label>
             <p class="text-xs text-[var(--text-muted)]">When ticked, access falls back to the parent folder's groups when this folder's own list doesn't grant access.</p>
-            <div id="fm-error" class="hidden" role="alert" aria-live="polite" style="color:#f87171;font-size:13px"></div>
+            <div id="fm-error" class="hidden" role="alert" aria-live="polite" style="color:var(--danger-text);font-size:13px"></div>
         </div>
         <div class="flex justify-end gap-3 mt-6">
             <button type="button" id="fm-cancel" class="btn btn-secondary btn-sm" style="width:auto">Cancel</button>
@@ -276,7 +276,7 @@
                 <label class="form-label" for="pfm-desc">Description</label>
                 <input type="text" id="pfm-desc" class="form-input" placeholder="e.g. My daily servers" autocomplete="off">
             </div>
-            <div id="pfm-error" class="hidden" role="alert" aria-live="polite" style="color:#f87171;font-size:13px"></div>
+            <div id="pfm-error" class="hidden" role="alert" aria-live="polite" style="color:var(--danger-text);font-size:13px"></div>
         </div>
         <div class="flex justify-end gap-3 mt-6">
             <button type="button" id="pfm-cancel" class="btn btn-secondary btn-sm" style="width:auto">Cancel</button>
@@ -296,7 +296,7 @@
                 <select id="atf-folder" class="form-input"></select>
                 <p id="atf-empty" class="hidden text-xs text-[var(--text-muted)] mt-1">You have no personal folders yet. Create one from the Personal scope first.</p>
             </div>
-            <div id="atf-error" class="hidden" role="alert" aria-live="polite" style="color:#f87171;font-size:13px"></div>
+            <div id="atf-error" class="hidden" role="alert" aria-live="polite" style="color:var(--danger-text);font-size:13px"></div>
         </div>
         <div class="flex justify-end gap-3 mt-6">
             <button type="button" id="atf-cancel" class="btn btn-secondary btn-sm" style="width:auto">Cancel</button>
@@ -382,7 +382,7 @@
                         <label class="form-label" for="em-allowed-domains">Allowed domains — web sessions can only visit these; empty = nothing loads</label>
                         <textarea id="em-allowed-domains" class="form-input" rows="2" placeholder="example.com, *.example.org" autocomplete="off"></textarea>
                         <p class="text-xs text-[var(--text-muted)] mt-1">Comma- or newline-separated. A domain also allows its subdomains. localhost and link-local addresses stay blocked.</p>
-                        <p id="em-allowed-domains-warning" class="hidden text-xs mt-1" role="status" style="color:#f0c040">No domains allowed — every site will fail with DNS_PROBE_FINISHED_NXDOMAIN. Add at least one domain.</p>
+                        <p id="em-allowed-domains-warning" class="hidden text-xs mt-1" role="status" style="color:var(--warning-text)">No domains allowed — every site will fail with DNS_PROBE_FINISHED_NXDOMAIN. Add at least one domain.</p>
                     </div>
                     <div id="em-container-field" class="span-2" style="display:none">
                         <label class="form-label" for="em-container-image">Container image</label>
@@ -614,7 +614,7 @@
         </div>
 
         <div class="entry-modal-footer">
-            <div id="em-error" class="hidden entry-modal-error" role="alert" aria-live="polite" style="color:#f87171;font-size:13px"></div>
+            <div id="em-error" class="hidden entry-modal-error" role="alert" aria-live="polite" style="color:var(--danger-text);font-size:13px"></div>
             <div class="flex justify-end gap-3" style="flex-shrink:0">
                 <button type="button" id="em-cancel" class="btn btn-secondary btn-sm" style="width:auto">Cancel</button>
                 <button type="button" id="em-save" class="btn btn-primary btn-sm" style="width:auto">Create Entry</button>
@@ -637,7 +637,7 @@
                 <label class="form-label" for="pm-password">Password</label>
                 <input type="password" id="pm-password" class="form-input" autocomplete="new-password">
             </div>
-            <div id="pm-error" class="hidden" role="alert" aria-live="polite" style="color:#f87171;font-size:13px"></div>
+            <div id="pm-error" class="hidden" role="alert" aria-live="polite" style="color:var(--danger-text);font-size:13px"></div>
         </div>
         <div class="flex justify-end gap-3 mt-6">
             <button type="button" id="pm-cancel" class="btn btn-secondary btn-sm" style="width:auto">Cancel</button>
@@ -682,7 +682,7 @@
                 <a href="/api/addressbook/import-template" class="text-sm link-accent">Download CSV template</a>
                 <p class="text-xs text-[var(--text-muted)] mt-1">The template includes optional settings columns for RDP and auth options. Leave blank whatever is not needed.</p>
             </div>
-            <div id="import-error" class="hidden" role="alert" aria-live="polite" style="color:#f87171;font-size:13px"></div>
+            <div id="import-error" class="hidden" role="alert" aria-live="polite" style="color:var(--danger-text);font-size:13px"></div>
             <div id="import-results" class="hidden" style="font-size:13px;color:var(--text-secondary)"></div>
         </div>
         <div class="flex justify-end gap-3 mt-6">
@@ -702,7 +702,7 @@
     .proto-vdi { background: rgba(236,72,153,0.15); color: #f472b6; border-color: rgba(236,72,153,0.3); }
     .folder-item { display:flex;align-items:center;padding:8px 12px;border-radius:8px;font-size:13px;color:var(--text-secondary);cursor:pointer;transition:all 0.15s }
     .folder-item:hover { background:var(--bg-hover);color:var(--text-primary) }
-    .folder-item.active { background:rgba(16,185,129,0.1);color:#34d399 }
+    .folder-item.active { background:rgba(16,185,129,0.1);color:var(--accent-text) }
     .entry-row { display:flex;align-items:center;padding:10px 12px;border-radius:8px;cursor:pointer;transition:all 0.15s }
     .entry-row:hover { background:var(--bg-hover) }
     .entry-row.selected { background:rgba(59,130,246,0.1) }
@@ -829,9 +829,9 @@
         padding:16px 24px; box-shadow:0 8px 32px rgba(0,0,0,0.5); max-width:420px; width:90%;
         font-size:13px; color:var(--text-primary); animation:fadeInUp 0.2s ease;
     }
-    .rotate-toast .toast-label { font-size:11px;font-weight:600;color:#fbbf24;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px; }
+    .rotate-toast .toast-label { font-size:11px;font-weight:600;color:var(--warning-text);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px; }
     .rotate-toast .toast-pw {
-        font-family:var(--font-mono); font-size:15px; color:#34d399; background:var(--bg-input);
+        font-family:var(--font-mono); font-size:15px; color:var(--accent-text); background:var(--bg-input);
         border:1px solid var(--border); border-radius:6px; padding:10px 12px; word-break:break-all;
         user-select:all; cursor:text;
     }
@@ -1168,7 +1168,7 @@
             return loadPersonalFolders().then(function() { renderFolders(); });
         }).catch(function(err) {
             if (err && err.message === 'redirect') return;
-            showInlineError('<p style="color:#f87171;font-size:13px;padding:32px 0;text-align:center">' + escapeHtml(err.message || 'Delete failed.') + '</p>');
+            showInlineError('<p style="color:var(--danger-text);font-size:13px;padding:32px 0;text-align:center">' + escapeHtml(err.message || 'Delete failed.') + '</p>');
         });
     }
     function openNewPersonalFolder() {
@@ -1729,7 +1729,7 @@
             var name = def.name;
             var val = values[name] !== undefined && values[name] !== null ? String(values[name]) : '';
             var req = !!def.required;
-            var reqMark = req ? ' <span style="color:#f87171">*</span>' : '';
+            var reqMark = req ? ' <span style="color:var(--danger-text)">*</span>' : '';
             html.push('<div>');
             html.push('<label class="form-label" for="em-cf-' + escapeAttr(name) + '">' + escapeHtml(name) + reqMark + '</label>');
             if (def.type === 'select') {
@@ -2673,7 +2673,7 @@
             loadFolders();
         }).catch(function(err) {
             if (err && err.message === 'redirect') return;
-            showInlineError('<p style="color:#f87171;font-size:13px;padding:32px 0;text-align:center">' + escapeHtml(err.message || 'Delete failed.') + '</p>');
+            showInlineError('<p style="color:var(--danger-text);font-size:13px;padding:32px 0;text-align:center">' + escapeHtml(err.message || 'Delete failed.') + '</p>');
         });
     }
 
@@ -3243,7 +3243,7 @@
             reloadSelectedEntries();
         }).catch(function(err) {
             if (err && err.message === 'redirect') return;
-            showInlineError('<p style="color:#f87171;font-size:13px;padding:32px 0;text-align:center">' + escapeHtml(err.message || 'Delete failed.') + '</p>');
+            showInlineError('<p style="color:var(--danger-text);font-size:13px;padding:32px 0;text-align:center">' + escapeHtml(err.message || 'Delete failed.') + '</p>');
         });
     }
 
@@ -3269,7 +3269,7 @@
             reloadSelectedEntries();
         }).catch(function(err) {
             if (err && err.message === 'redirect') return;
-            showInlineError('<p style="color:#f87171;font-size:13px;padding:32px 0;text-align:center">Rotation failed: ' + escapeHtml(err.message || 'unknown error') + '</p>');
+            showInlineError('<p style="color:var(--danger-text);font-size:13px;padding:32px 0;text-align:center">Rotation failed: ' + escapeHtml(err.message || 'unknown error') + '</p>');
         });
     }
     function showRotateToast(pw, entryName) {
@@ -3457,15 +3457,15 @@
                 if (!res.ok) throw new Error(res.data.error || 'Import failed (HTTP ' + res.status + ')');
                 var d = res.data;
                 var html = '<p style="margin:0">'
-                    + '<strong style="color:#34d399">' + escapeHtml(String(d.imported || 0)) + ' created</strong>'
-                    + ', <strong style="color:#60a5fa">' + escapeHtml(String(d.updated || 0)) + ' updated</strong>'
+                    + '<strong style="color:var(--accent-text)">' + escapeHtml(String(d.imported || 0)) + ' created</strong>'
+                    + ', <strong style="color:var(--info-text)">' + escapeHtml(String(d.updated || 0)) + ' updated</strong>'
                     + ', <strong>' + escapeHtml(String(d.unchanged || 0)) + ' unchanged</strong>'
                     + ', <strong>' + escapeHtml(String(d.skipped || 0)) + ' skipped</strong>'
-                    + ((d.passwords_dropped) ? ', <strong style="color:#fbbf24">' + escapeHtml(String(d.passwords_dropped)) + ' passwords dropped (no storage key)</strong>' : '')
+                    + ((d.passwords_dropped) ? ', <strong style="color:var(--warning-text)">' + escapeHtml(String(d.passwords_dropped)) + ' passwords dropped (no storage key)</strong>' : '')
                     + '.</p>';
                 if (d.errors && d.errors.length) {
-                    html += '<p style="margin:6px 0 0;color:#f87171;font-size:12px"><strong>' + escapeHtml(String(d.errors.length)) + ' row error(s):</strong></p>';
-                    html += '<ul style="margin:6px 0 0;padding-left:18px;font-size:12px;color:#f87171;max-height:160px;overflow-y:auto">';
+                    html += '<p style="margin:6px 0 0;color:var(--danger-text);font-size:12px"><strong>' + escapeHtml(String(d.errors.length)) + ' row error(s):</strong></p>';
+                    html += '<ul style="margin:6px 0 0;padding-left:18px;font-size:12px;color:var(--danger-text);max-height:160px;overflow-y:auto">';
                     for (var i = 0; i < d.errors.length; i++) {
                         html += '<li>Row ' + escapeHtml(String(d.errors[i].row)) + ': ' + escapeHtml(d.errors[i].error || '') + '</li>';
                     }
