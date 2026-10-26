@@ -52,29 +52,85 @@ function closeModal(id) {
 // dead). These render inside the page instead, so every engine behaves the
 // same. Both return promises.
 
+// Self-contained styles: client.html loads no stylesheet, so the dialog must
+// not depend on Tailwind utilities, .card or .btn. Custom properties fall
+// back to the dark palette when a page does not define them.
+var UI_DIALOG_CSS = [
+  '.ui-dialog-overlay{position:fixed;top:0;right:0;bottom:0;left:0;z-index:2147483000;',
+  'display:flex;align-items:center;justify-content:center;padding:20px;',
+  'background:rgba(2,6,23,.62);font-family:inherit;margin:0}',
+  '.ui-dialog-card{box-sizing:border-box;width:min(440px,100%);max-height:calc(100vh - 40px);',
+  'overflow:auto;padding:22px 22px 18px;border-radius:12px;',
+  'background:var(--bg-card,#1e293b);color:var(--text-primary,#e2e8f0);',
+  'border:1px solid var(--border,#334155);',
+  'box-shadow:0 24px 60px rgba(0,0,0,.5)}',
+  '.ui-dialog-message{margin:0 0 20px;font-size:14px;line-height:1.5;white-space:pre-wrap;',
+  'color:var(--text-primary,#e2e8f0);word-break:break-word}',
+  '.ui-dialog-message.ui-dialog-danger{color:var(--danger-text,#fca5a5)}',
+  '.ui-dialog-actions{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap}',
+  '.ui-dialog-btn{appearance:none;-webkit-appearance:none;font:inherit;font-size:13px;',
+  'font-weight:600;line-height:1;padding:10px 16px;border-radius:8px;cursor:pointer;',
+  'border:1px solid var(--border,#334155);',
+  'background:var(--bg-hover,#334155);color:var(--text-primary,#e2e8f0)}',
+  '.ui-dialog-btn:hover{filter:brightness(1.12)}',
+  '.ui-dialog-btn:focus-visible{outline:2px solid var(--accent,#60a5fa);outline-offset:2px}',
+  '.ui-dialog-btn-ok{background:var(--accent,#2563eb);border-color:var(--accent,#2563eb);',
+  'color:var(--accent-contrast,#f8fafc)}',
+  '.ui-dialog-btn-danger{background:var(--danger,#b91c1c);border-color:var(--danger,#b91c1c);',
+  'color:#fff}'
+].join('');
+
+function uiDialogStyles() {
+    if (document.getElementById('ui-dialog-style')) return;
+    var style = document.createElement('style');
+    style.id = 'ui-dialog-style';
+    style.textContent = UI_DIALOG_CSS;
+    (document.head || document.documentElement).appendChild(style);
+}
+
 function uiDialog(message, opts) {
     opts = opts || {};
-    var icon = opts.danger ? 'text-[var(--danger-text)]' : 'text-[var(--text-primary)]';
+    uiDialogStyles();
+    // One dialog at a time: a stray overlay from an earlier click (or a page
+    // that never resolved it) must not stack up behind the new one.
+    Array.prototype.forEach.call(document.querySelectorAll('.ui-dialog-overlay'), function(el) {
+        el.parentNode.removeChild(el);
+    });
+
     var overlay = document.createElement('div');
-    overlay.className = 'fixed inset-0 z-[120] flex items-center justify-center';
+    overlay.className = 'ui-dialog-overlay';
     overlay.setAttribute('role', 'dialog');
     overlay.setAttribute('aria-modal', 'true');
-    overlay.innerHTML =
-        '<div class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>' +
-        '<div class="relative card w-full max-w-sm shadow-xl">' +
-          '<p class="ui-dialog-message ' + icon + ' text-sm whitespace-pre-line mb-6"></p>' +
-          '<div class="flex justify-end gap-2">' +
-            '<button type="button" class="btn btn-secondary ui-dialog-cancel">Cancel</button>' +
-            '<button type="button" class="btn ' + (opts.danger ? 'btn-danger' : 'btn-primary') + ' ui-dialog-ok">OK</button>' +
-          '</div>' +
-        '</div>';
-    overlay.querySelector('.ui-dialog-message').textContent = String(message == null ? '' : message);
-    var cancelBtn = overlay.querySelector('.ui-dialog-cancel');
-    var okBtn = overlay.querySelector('.ui-dialog-ok');
-    okBtn.textContent = opts.confirmLabel || 'OK';
+    overlay.setAttribute('aria-live', 'assertive');
+
+    var card = document.createElement('div');
+    card.className = 'ui-dialog-card';
+
+    var text = document.createElement('p');
+    text.className = 'ui-dialog-message' + (opts.danger ? ' ui-dialog-danger' : '');
+    text.textContent = String(message == null ? '' : message);
+    card.appendChild(text);
+
+    var actions = document.createElement('div');
+    actions.className = 'ui-dialog-actions';
+
+    var cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'ui-dialog-btn ui-dialog-cancel';
     cancelBtn.textContent = opts.cancelLabel || 'Cancel';
-    if (opts.alertOnly) cancelBtn.remove();
+
+    var okBtn = document.createElement('button');
+    okBtn.type = 'button';
+    okBtn.className = 'ui-dialog-btn ui-dialog-ok' + (opts.danger ? ' ui-dialog-btn-danger' : ' ui-dialog-btn-ok');
+    okBtn.textContent = opts.confirmLabel || 'OK';
+
+    if (!opts.alertOnly) actions.appendChild(cancelBtn);
+    actions.appendChild(okBtn);
+    card.appendChild(actions);
+    overlay.appendChild(card);
     document.body.appendChild(overlay);
+
+    var previousFocus = document.activeElement;
 
     return new Promise(function(resolve) {
         var done = false;
@@ -82,16 +138,24 @@ function uiDialog(message, opts) {
             if (done) return;
             done = true;
             document.removeEventListener('keydown', onKey, true);
-            overlay.remove();
+            if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            if (previousFocus && previousFocus.focus) {
+                try { previousFocus.focus(); } catch (e) {}
+            }
             resolve(value);
         }
         function onKey(e) {
-            if (e.key === 'Escape') { e.preventDefault(); finish(false); }
-            else if (e.key === 'Enter' && document.activeElement !== cancelBtn) { e.preventDefault(); finish(true); }
+            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); }
+            else if (e.key === 'Enter' && document.activeElement !== cancelBtn) {
+                e.preventDefault(); e.stopPropagation(); finish(true);
+            }
         }
-        okBtn.addEventListener('click', function() { finish(true); });
-        if (cancelBtn.parentNode) cancelBtn.addEventListener('click', function() { finish(false); });
-        overlay.querySelector('.absolute.inset-0').addEventListener('click', function() { finish(false); });
+        okBtn.addEventListener('click', function(e) { e.stopPropagation(); finish(true); });
+        cancelBtn.addEventListener('click', function(e) { e.stopPropagation(); finish(false); });
+        overlay.addEventListener('mousedown', function(e) {
+            if (e.target === overlay) finish(false);
+        });
+        overlay.addEventListener('keydown', function(e) { e.stopPropagation(); });
         document.addEventListener('keydown', onKey, true);
         okBtn.focus();
     });
