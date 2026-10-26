@@ -1557,7 +1557,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
     border-radius: 8px;
     box-shadow: 0 4px 12px rgba(0,0,0,0.35);
 }
-.skip-link:focus,
+/* Keyboard focus only: the desktop webview focuses the first link on load,
+   and :focus alone made the skip link sit visibly at the top of the page. */
 .skip-link:focus-visible {
     left: 16px;
     top: 16px;
