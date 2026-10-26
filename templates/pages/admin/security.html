@@ -210,16 +210,16 @@ window.addEventListener('hashchange', function() {
 
 function tlsBadge(status, expiresInDays) {
     if (status === 'valid') {
-        return '<span class="inline-block px-2 py-0.5 text-xs rounded border bg-emerald-900/50 text-emerald-300 border-emerald-800">Valid</span>';
+        return '<span class="badge badge-success">Valid</span>';
     }
     if (status === 'expiring_soon') {
         var days = (typeof expiresInDays === 'number' && expiresInDays >= 0)
             ? ' — expires in ' + expiresInDays + ' day' + (expiresInDays === 1 ? '' : 's')
             : '';
-        return '<span class="inline-block px-2 py-0.5 text-xs rounded border bg-amber-900/50 text-amber-300 border-amber-800">Expiring soon' + days + '</span>';
+        return '<span class="badge badge-warning">Expiring soon' + days + '</span>';
     }
     if (status === 'expired') {
-        return '<span class="inline-block px-2 py-0.5 text-xs rounded border bg-red-900/50 text-red-300 border-red-800">Expired</span>';
+        return '<span class="badge badge-danger">Expired</span>';
     }
     return '<span class="inline-block px-2 py-0.5 text-xs rounded border bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border)]">Unknown</span>';
 }
@@ -235,7 +235,7 @@ function renderTlsStatus(data) {
     var summary = document.getElementById('tls-summary');
     if (!summary) return;
     if (!data) {
-        summary.innerHTML = '<p class="text-sm text-red-400">Failed to load certificate information.</p>';
+        summary.innerHTML = '<p class="text-sm text-[var(--danger-text)]">Failed to load certificate information.</p>';
         return;
     }
     var html = '<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">';
@@ -245,8 +245,8 @@ function renderTlsStatus(data) {
         '<code class="flex-1 px-3 py-2 bg-[var(--bg-card)] border border-[var(--border)] rounded-lg text-[var(--text-primary)] text-xs break-all">' +
         escapeHtml(data.tls_cert_path || 'Not configured') + '</code>' +
         (data.cert_exists
-            ? '<span class="px-2 py-0.5 text-xs rounded border bg-emerald-900/50 text-emerald-300 border-emerald-800">Present</span>'
-            : '<span class="px-2 py-0.5 text-xs rounded border bg-red-900/50 text-red-300 border-red-800">Missing</span>') +
+            ? '<span class="badge badge-success">Present</span>'
+            : '<span class="badge badge-danger">Missing</span>') +
         '</div></div>';
     html += '<div>' +
         '<p class="form-label">Private Key Path</p>' +
@@ -254,8 +254,8 @@ function renderTlsStatus(data) {
         '<code class="flex-1 px-3 py-2 bg-[var(--bg-card)] border border-[var(--border)] rounded-lg text-[var(--text-primary)] text-xs break-all">' +
         escapeHtml(data.tls_key_path || 'Not configured') + '</code>' +
         (data.key_exists
-            ? '<span class="px-2 py-0.5 text-xs rounded border bg-emerald-900/50 text-emerald-300 border-emerald-800">Present</span>'
-            : '<span class="px-2 py-0.5 text-xs rounded border bg-red-900/50 text-red-300 border-red-800">Missing</span>') +
+            ? '<span class="badge badge-success">Present</span>'
+            : '<span class="badge badge-danger">Missing</span>') +
         '</div></div>';
     html += '</div>';
     var cert = data.cert;
@@ -271,7 +271,7 @@ function renderTlsStatus(data) {
             tlsBadge(cert.status, cert.expires_in_days) +
             '</div>';
     } else if (data.cert_error) {
-        html += '<p class="text-sm text-red-400 mt-4">' + escapeHtml(data.cert_error) + '</p>';
+        html += '<p class="text-sm text-[var(--danger-text)] mt-4">' + escapeHtml(data.cert_error) + '</p>';
     }
     summary.innerHTML = html;
 }
@@ -285,7 +285,7 @@ function loadTlsStatus() {
         .then(function(r) { return r.ok ? r.json() : null; })
         .then(renderTlsStatus)
         .catch(function() {
-            summary.innerHTML = '<p class="text-sm text-red-400">Failed to load certificate information.</p>';
+            summary.innerHTML = '<p class="text-sm text-[var(--danger-text)]">Failed to load certificate information.</p>';
         });
 }
 

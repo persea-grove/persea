@@ -29,8 +29,8 @@
     </div>
     <div id="session-form" class="hidden mb-6 card">
         <div id="new-session-toggle" class="flex items-center gap-2 cursor-pointer mb-4" role="button" tabindex="0" aria-expanded="false" aria-controls="new-session-fields">
-            <svg id="new-session-arrow" class="w-4 h-4 text-emerald-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-            <span class="text-emerald-400 font-semibold">New Ad-Hoc Session</span>
+            <svg id="new-session-arrow" class="w-4 h-4 accent-text transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="accent-text font-semibold">New Ad-Hoc Session</span>
         </div>
         <div id="new-session-fields" class="hidden space-y-4">
             <div class="form-group"><label class="form-label">Type</label>
@@ -92,7 +92,6 @@
         </div>
     </div>
 </div>
-<style>.status-pill{padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid}.status-active{background:rgba(52,211,153,.12);color:#34d399;border-color:rgba(52,211,153,.3)}.status-pending{background:rgba(240,192,64,.12);color:#f0c040;border-color:rgba(240,192,64,.3)}.status-disconnected{background:rgba(96,165,250,.12);color:#60a5fa;border-color:rgba(96,165,250,.3)}.status-logged_out{background:rgba(233,69,96,.12);color:#f87171;border-color:rgba(233,69,96,.3)}.status-completed,.status-expired,.status-error{background:rgba(107,114,128,.12);color:#9ca3af;border-color:rgba(107,114,128,.3)}.light .status-active{color:#047857;border-color:rgba(4,120,87,.4)}.light .status-pending{color:#b45309;border-color:rgba(180,83,9,.4)}.light .status-disconnected{color:#1d4ed8;border-color:rgba(29,78,216,.4)}.light .status-logged_out{color:#b91c1c;border-color:rgba(185,28,28,.4)}.light .status-completed,.light .status-expired,.light .status-error{color:#475569;border-color:rgba(71,85,105,.4)}</style>
 <script nonce="{{ csp_nonce }}">
 (function() {
     // ── Session open preference ──────────────────────────────────────

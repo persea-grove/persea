@@ -125,9 +125,8 @@
 <script nonce="{{ csp_nonce }}">
 function groupsShowStatus(msg, ok) {
     var el = document.getElementById('groups-feedback');
-    el.innerHTML = '<div class="text-sm px-4 py-2 rounded-lg border ' +
-        (ok ? 'bg-emerald-900/40 text-emerald-300 border-emerald-800'
-            : 'bg-red-900/40 text-red-300 border-red-800') + '">' + escapeHtml(msg) + '</div>';
+    el.innerHTML = '<div class="' +
+        (ok ? 'notice notice-success' : 'notice notice-error') + '">' + escapeHtml(msg) + '</div>';
     if (ok) { setTimeout(function() { el.innerHTML = ''; }, 4000); }
 }
 
@@ -152,19 +151,19 @@ function groupById(id) {
 
 function renderGroupRow(g) {
     var mapped = g.provider_group_count > 0
-        ? '<span class="text-emerald-400">' + g.provider_group_count + ' mapped</span>'
+        ? '<span class="text-[var(--success-text)]">' + g.provider_group_count + ' mapped</span>'
         : '<span class="text-[var(--text-muted)]">—</span>';
     return '<tr class="hover:bg-[var(--bg-hover)]/50">' +
         '<td class="px-4 py-3 text-sm font-medium text-[var(--text-primary)]">' + escapeHtml(g.name) +
-            (g.auto_provisioned ? ' <span class="ml-1.5 inline-block px-1.5 py-0.5 text-[10px] font-semibold rounded bg-blue-900/40 text-blue-300 border border-blue-800">auto</span>' : '') +
+            (g.auto_provisioned ? ' <span class="ml-1.5 badge badge-sm badge-info">auto</span>' : '') +
         '</td>' +
         '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + (g.description ? escapeHtml(g.description) : '—') + '</td>' +
         '<td class="px-4 py-3 text-sm">' + mapped + '</td>' +
         '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + g.folder_count + '</td>' +
         '<td class="px-4 py-3 text-right text-sm whitespace-nowrap">' +
             '<button data-action="open-mappings-modal" data-id="' + g.id + '" class="text-[var(--text-muted)] hover:text-blue-400 mr-3">Mappings</button>' +
-            '<button data-action="open-edit-modal" data-id="' + g.id + '" class="text-[var(--text-muted)] hover:text-emerald-400 mr-3">Edit</button>' +
-            '<button data-action="open-delete-modal" data-id="' + g.id + '" class="text-[var(--text-muted)] hover:text-red-400">Delete</button>' +
+            '<button data-action="open-edit-modal" data-id="' + g.id + '" class="text-[var(--text-muted)] hover:text-[var(--success-text)] mr-3">Edit</button>' +
+            '<button data-action="open-delete-modal" data-id="' + g.id + '" class="text-[var(--text-muted)] hover:text-[var(--danger-text)]">Delete</button>' +
         '</td></tr>';
 }
 
@@ -182,7 +181,7 @@ function loadGroups() {
         })
         .catch(function(e) {
             document.getElementById('groups-tbody').innerHTML =
-                '<tr><td colspan="5" class="px-4 py-8 text-center text-red-400 text-sm">Failed to load groups</td></tr>';
+                '<tr><td colspan="5" class="px-4 py-8 text-center text-[var(--danger-text)] text-sm">Failed to load groups</td></tr>';
             groupsShowStatus(e.message, false);
         });
 }
@@ -290,7 +289,7 @@ window.openMappingsModal = function(id) {
                 list.innerHTML = mappings.map(function(m) {
                     return '<li class="flex items-center justify-between px-4 py-3 text-sm">' +
                         '<span class="text-[var(--text-primary)]">' + escapeHtml(m.provider_group) + '</span>' +
-                        '<button data-action="remove-mapping" data-mapping-id="' + m.id + '" class="text-xs text-red-400 hover:text-red-300">Remove</button>' +
+                        '<button data-action="remove-mapping" data-mapping-id="' + m.id + '" class="text-xs link-danger">Remove</button>' +
                     '</li>';
                 }).join('');
             }
@@ -321,7 +320,7 @@ window.openMappingsModal = function(id) {
         })
         .catch(function(err) {
             document.getElementById('mappings-list').innerHTML =
-                '<li class="px-4 py-3 text-sm text-red-400">Failed to load mappings</li>';
+                '<li class="px-4 py-3 text-sm text-[var(--danger-text)]">Failed to load mappings</li>';
             groupsShowStatus(err.message, false);
         });
 };

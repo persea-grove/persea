@@ -176,20 +176,20 @@ function showProviderFields(type) {
 
 function providerTypeBadge(type) {
     var colors = {
-        oidc: 'bg-blue-900/50 text-blue-300 border-blue-800',
-        ldap: 'bg-purple-900/50 text-purple-300 border-purple-800',
-        saml: 'bg-cyan-900/50 text-cyan-300 border-cyan-800',
-        radius: 'bg-orange-900/50 text-orange-300 border-orange-800',
-        database: 'bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border)]',
-        totp: 'bg-teal-900/50 text-teal-300 border-teal-800'
+        oidc: 'badge badge-info',
+        ldap: 'badge badge-purple',
+        saml: 'badge badge-info',
+        radius: 'badge badge-warning',
+        database: 'badge badge-neutral',
+        totp: 'badge badge-success'
     };
-    return '<span class="inline-block px-2 py-0.5 text-xs rounded border ' + (colors[type] || colors.database) + '">' + type.toUpperCase() + '</span>';
+    return '<span class="' + (colors[type] || colors.database) + '">' + type.toUpperCase() + '</span>';
 }
 
 function renderProviderRow(provider) {
     var statusToggle = provider.enabled
-        ? '<button data-action="toggle-provider" data-id="' + provider.id + '" data-enable="false" class="text-emerald-400 hover:text-red-400">Enabled</button>'
-        : '<button data-action="toggle-provider" data-id="' + provider.id + '" data-enable="true" class="text-[var(--text-muted)] hover:text-emerald-400">Disabled</button>';
+        ? '<button data-action="toggle-provider" data-id="' + provider.id + '" data-enable="false" class="text-[var(--success-text)] hover:text-[var(--danger-text)]">Enabled</button>'
+        : '<button data-action="toggle-provider" data-id="' + provider.id + '" data-enable="true" class="text-[var(--text-muted)] hover:text-[var(--success-text)]">Disabled</button>';
 
     return '<tr class="hover:bg-[var(--bg-hover)]/50">' +
         '<td class="px-4 py-3 text-[var(--text-muted)] cursor-grab">⠿</td>' +
@@ -200,9 +200,9 @@ function renderProviderRow(provider) {
         '<td class="px-4 py-3 text-right text-sm">' +
             '<button data-action="move-provider" data-id="' + provider.id + '" data-direction="up" class="text-[var(--text-muted)] hover:text-[var(--text-primary)] mr-2" title="Move up">↑</button>' +
             '<button data-action="move-provider" data-id="' + provider.id + '" data-direction="down" class="text-[var(--text-muted)] hover:text-[var(--text-primary)] mr-2" title="Move down">↓</button>' +
-            '<button data-action="configure-provider" data-id="' + provider.id + '" class="text-[var(--text-muted)] hover:text-emerald-400 mr-2">Configure</button>' +
+            '<button data-action="configure-provider" data-id="' + provider.id + '" class="text-[var(--text-muted)] hover:text-[var(--success-text)] mr-2">Configure</button>' +
             '<button data-action="test-provider-connection" data-id="' + provider.id + '" class="text-[var(--text-muted)] hover:text-blue-400 mr-2">Test</button>' +
-            '<button data-action="delete-provider" data-id="' + provider.id + '" class="text-[var(--text-muted)] hover:text-red-400">Delete</button>' +
+            '<button data-action="delete-provider" data-id="' + provider.id + '" class="text-[var(--text-muted)] hover:text-[var(--danger-text)]">Delete</button>' +
         '</td></tr>';
 }
 
@@ -243,7 +243,7 @@ function configureProvider(id) {
         .catch(function(e) {
             if (e && e.message === 'unauthorized') { return; }
             document.getElementById('provider-config-body').innerHTML =
-                '<p class="text-sm text-red-400">Failed to load configuration.</p>';
+                '<p class="text-sm text-[var(--danger-text)]">Failed to load configuration.</p>';
         });
 }
 
@@ -273,7 +273,7 @@ function buildConfigForm(config) {
         }
         html += '</div>';
     }
-    html += '<div id="provider-config-error" class="hidden text-red-400 text-sm" role="alert"></div>';
+    html += '<div id="provider-config-error" class="hidden text-[var(--danger-text)] text-sm" role="alert"></div>';
     html += '</div>';
     return html;
 }
@@ -360,7 +360,7 @@ function loadProviders() {
         .catch(function(e) {
             if (e && e.message === 'unauthorized') { return; }
             document.getElementById('provider-table-body').innerHTML =
-                '<tr><td colspan="6" class="px-4 py-8 text-center text-red-400 text-sm">Failed to load providers</td></tr>';
+                '<tr><td colspan="6" class="px-4 py-8 text-center text-[var(--danger-text)] text-sm">Failed to load providers</td></tr>';
         });
 }
 

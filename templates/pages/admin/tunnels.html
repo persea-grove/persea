@@ -149,7 +149,7 @@
         }
         empty.classList.add('hidden');
         el.innerHTML = jumpHosts.map(jh => `
-            <div class="flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-colors ${selectedHostId === jh.id ? 'border-emerald-600 bg-emerald-900/20' : 'border-[var(--border)] bg-[var(--bg-card)]/50 hover:border-[var(--border)]'}"
+            <div class="flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-colors ${selectedHostId === jh.id ? 'border-emerald-600 bg-[var(--bg-hover)]' : 'border-[var(--border)] bg-[var(--bg-card)]/50 hover:border-[var(--border)]'}"
                  data-host-id="${esc(jh.id)}">
                 <div class="flex items-center gap-3">
                     <span class="w-2 h-2 rounded-full ${jh.status === 'connected' ? 'bg-green-400' : jh.status === 'error' ? 'bg-red-400' : 'bg-[var(--text-muted)]'}"></span>
@@ -162,7 +162,7 @@
                     <button data-action="edit" data-host-id="${esc(jh.id)}" class="p-1.5 text-[var(--text-muted)] hover:text-[var(--text-secondary)] rounded" title="Edit" aria-label="Edit jump host">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
                     </button>
-                    <button data-action="delete" data-host-id="${esc(jh.id)}" class="p-1.5 text-[var(--text-muted)] hover:text-red-400 rounded" title="Delete" aria-label="Delete jump host">
+                    <button data-action="delete" data-host-id="${esc(jh.id)}" class="p-1.5 text-[var(--text-muted)] hover:text-[var(--danger-text)] rounded" title="Delete" aria-label="Delete jump host">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                     </button>
                 </div>
@@ -191,7 +191,7 @@
                         Test Connection
                     </button>
                     <button data-action="edit" data-host-id="${esc(jh.id)}" class="px-3 py-1.5 bg-[var(--bg-hover)] hover:bg-[var(--bg-card)] text-[var(--text-secondary)] text-xs rounded-lg transition-colors">Edit</button>
-                    <button data-action="delete" data-host-id="${esc(jh.id)}" class="px-3 py-1.5 bg-red-900/50 hover:bg-red-800/50 text-red-300 text-xs rounded-lg transition-colors">Delete</button>
+                    <button data-action="delete" data-host-id="${esc(jh.id)}" class="btn btn-danger btn-sm">Delete</button>
                 </div>
                 <div id="test-result" class="hidden mt-2 p-3 rounded-lg text-sm" aria-live="polite"></div>
             </div>
@@ -272,20 +272,20 @@
     async function testJumpHost(id) {
         const el = document.getElementById('test-result');
         el.classList.remove('hidden');
-        el.className = 'mt-2 p-3 rounded-lg text-sm bg-blue-900/30 text-blue-300 border border-blue-800';
+        el.className = 'notice notice-info mt-2 text-sm';
         el.textContent = 'Testing connection...';
         try {
             const res = await fetch(`/api/admin/jump-hosts/${id}/test`, { method: 'POST' });
             const data = await res.json();
             if (data.ok) {
-                el.className = 'mt-2 p-3 rounded-lg text-sm bg-green-900/30 text-green-300 border border-green-800';
+                el.className = 'notice notice-success mt-2 text-sm';
                 el.textContent = 'Connection successful — ' + (data.message || 'OK');
             } else {
-                el.className = 'mt-2 p-3 rounded-lg text-sm bg-red-900/30 text-red-300 border border-red-800';
+                el.className = 'notice notice-error mt-2 text-sm';
                 el.textContent = 'Connection failed — ' + (data.error || 'unknown error');
             }
         } catch (e) {
-            el.className = 'mt-2 p-3 rounded-lg text-sm bg-red-900/30 text-red-300 border border-red-800';
+            el.className = 'notice notice-error mt-2 text-sm';
             el.textContent = 'Test request failed: ' + e.message;
         }
     }
@@ -368,7 +368,7 @@
                 <td class="py-2 text-[var(--text-primary)]">${esc(t.name || '')}</td>
                 <td class="py-2 text-[var(--text-muted)]">${t.hops || ''}</td>
                 <td class="py-2 text-[var(--text-muted)]">${esc(t.user || '')}</td>
-                <td class="py-2"><span class="px-2 py-0.5 text-xs rounded-full ${t.status === 'connected' ? 'bg-green-900/50 text-green-300' : t.status === 'error' ? 'bg-red-900/50 text-red-300' : 'bg-yellow-900/50 text-yellow-300'}">${t.status || 'unknown'}</span></td>
+                <td class="py-2"><span class="${t.status === 'connected' ? 'badge badge-success' : 'badge badge-danger'}">${t.status || 'unknown'}</span></td>
                 <td class="py-2 text-[var(--text-muted)]">${t.duration || ''}</td>
                 <td class="py-2"><button disabled title="Disconnecting active tunnels from this page isn't supported yet — restart the persea service to close all active tunnels." class="text-xs text-[var(--text-muted)] cursor-not-allowed" aria-disabled="true">Disconnect</button></td>
             </tr>`).join('')}</tbody></table>`;

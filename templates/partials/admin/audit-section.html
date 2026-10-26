@@ -109,16 +109,16 @@
 <script nonce="{{ csp_nonce }}">
 function verifyChain() {
     var el = document.getElementById('chain-status');
-    el.className = 'px-3 py-1.5 rounded-lg text-sm font-medium border bg-blue-900/50 text-blue-300 border-blue-800';
+    el.className = 'badge badge-info text-sm';
     el.textContent = 'Verifying...';
     fetch('/api/audit/verify')
         .then(function(r) { return r.json(); })
         .then(function(r) {
             if (r.status === 'verified') {
-                el.className = 'px-3 py-1.5 rounded-lg text-sm font-medium border bg-emerald-900/50 text-emerald-300 border-emerald-800';
+                el.className = 'badge badge-success text-sm';
                 el.textContent = 'Verified (' + r.events_scanned + ' events)';
             } else {
-                el.className = 'px-3 py-1.5 rounded-lg text-sm font-medium border bg-red-900/50 text-red-300 border-red-800';
+                el.className = 'badge badge-danger text-sm';
                 el.textContent = 'Broken (' + r.errors.length + ' errors, ' + r.events_scanned + ' scanned)';
             }
         })

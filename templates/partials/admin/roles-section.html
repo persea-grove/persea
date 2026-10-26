@@ -156,9 +156,8 @@ var PERM_LABELS = {
 
 function rolesShowStatus(msg, ok) {
     var el = document.getElementById('roles-feedback');
-    el.innerHTML = '<div class="text-sm px-4 py-2 rounded-lg border ' +
-        (ok ? 'bg-emerald-900/40 text-emerald-300 border-emerald-800'
-            : 'bg-red-900/40 text-red-300 border-red-800') + '">' + escapeHtml(msg) + '</div>';
+    el.innerHTML = '<div class="' +
+        (ok ? 'notice notice-success' : 'notice notice-error') + '">' + escapeHtml(msg) + '</div>';
     if (ok) { setTimeout(function() { el.innerHTML = ''; }, 4000); }
 }
 
@@ -204,8 +203,8 @@ function renderRoleRow(r) {
         '<td class="px-4 py-3 text-sm text-[var(--text-secondary)]">' + escapeHtml(permLabels(r.permissions)) + '</td>' +
         '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + fmtDate(r.created_at) + '</td>' +
         '<td class="px-4 py-3 text-right text-sm whitespace-nowrap">' +
-            '<button data-action="roles-open-edit-modal" data-id="' + escapeHtml(String(r.id)) + '" class="text-[var(--text-muted)] hover:text-emerald-400 mr-3">Edit</button>' +
-            '<button data-action="roles-open-delete-modal" data-id="' + escapeHtml(String(r.id)) + '" class="text-[var(--text-muted)] hover:text-red-400">Delete</button>' +
+            '<button data-action="roles-open-edit-modal" data-id="' + escapeHtml(String(r.id)) + '" class="text-[var(--text-muted)] hover:text-[var(--success-text)] mr-3">Edit</button>' +
+            '<button data-action="roles-open-delete-modal" data-id="' + escapeHtml(String(r.id)) + '" class="text-[var(--text-muted)] hover:text-[var(--danger-text)]">Delete</button>' +
         '</td></tr>';
 }
 
@@ -224,7 +223,7 @@ function loadRoles() {
         })
         .catch(function(e) {
             tbody.innerHTML =
-                '<tr><td colspan="5" class="px-4 py-8 text-center text-red-400 text-sm">Failed to load roles</td></tr>';
+                '<tr><td colspan="5" class="px-4 py-8 text-center text-[var(--danger-text)] text-sm">Failed to load roles</td></tr>';
             rolesShowStatus(e.message, false);
         });
 }

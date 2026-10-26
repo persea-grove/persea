@@ -102,15 +102,15 @@
                         <div>
                             <label class="form-label">Mode</label>
                             <div class="flex gap-3" id="appearance-mode">
-                                <label class="flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--border)] cursor-pointer hover:border-[var(--border-focus)] transition-colors has-[:checked]:border-emerald-500 has-[:checked]:bg-emerald-900/20">
+                                <label class="flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--border)] cursor-pointer hover:border-[var(--border-focus)] transition-colors has-[:checked]:border-emerald-500 has-[:checked]:bg-[var(--bg-hover)]">
                                     <input type="radio" name="theme-mode" value="light" class="accent-emerald-500">
                                     <span class="text-sm text-[var(--text-secondary)]">Light</span>
                                 </label>
-                                <label class="flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--border)] cursor-pointer hover:border-[var(--border-focus)] transition-colors has-[:checked]:border-emerald-500 has-[:checked]:bg-emerald-900/20">
+                                <label class="flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--border)] cursor-pointer hover:border-[var(--border-focus)] transition-colors has-[:checked]:border-emerald-500 has-[:checked]:bg-[var(--bg-hover)]">
                                     <input type="radio" name="theme-mode" value="dark" class="accent-emerald-500">
                                     <span class="text-sm text-[var(--text-secondary)]">Dark</span>
                                 </label>
-                                <label class="flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--border)] cursor-pointer hover:border-[var(--border-focus)] transition-colors has-[:checked]:border-emerald-500 has-[:checked]:bg-emerald-900/20">
+                                <label class="flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--border)] cursor-pointer hover:border-[var(--border-focus)] transition-colors has-[:checked]:border-emerald-500 has-[:checked]:bg-[var(--bg-hover)]">
                                     <input type="radio" name="theme-mode" value="auto" class="accent-emerald-500">
                                     <span class="text-sm text-[var(--text-secondary)]">Auto</span>
                                 </label>
@@ -248,7 +248,7 @@
                                 Verify & Enable
                             </button>
                         </form>
-                        <p id="verify-error" class="text-sm text-red-400 mt-2 hidden"></p>
+                        <p id="verify-error" class="text-sm text-[var(--danger-text)] mt-2 hidden"></p>
                     </div>
                 </div>
 
@@ -339,13 +339,13 @@
                 </div>
 
                 <!-- New Token Display (shown once after creation) -->
-                <div id="new-token-banner" class="hidden bg-emerald-900/30 border border-emerald-700 rounded-lg p-4">
+                <div id="new-token-banner" class="hidden notice notice-success">
                     <div class="flex items-start justify-between">
                         <div>
-                            <h3 class="text-sm font-semibold text-emerald-300 mb-1">Token Created</h3>
-                            <p class="text-xs text-emerald-400/70 mb-3">Copy this token now — it won't be shown again.</p>
+                            <h3 class="text-sm font-semibold accent-text mb-1">Token Created</h3>
+                            <p class="text-xs text-[var(--success-text)] mb-3">Copy this token now — it won't be shown again.</p>
                             <div class="flex items-center gap-2">
-                                <code id="new-token-value" class="px-3 py-1.5 bg-[var(--bg-card)] rounded text-sm text-emerald-300 font-mono select-all break-all"></code>
+                                <code id="new-token-value" class="px-3 py-1.5 bg-[var(--bg-card)] rounded text-sm accent-text font-mono select-all break-all"></code>
                                 <button id="btn-copy-token" class="btn btn-secondary btn-sm shrink-0">
                                     Copy
                                 </button>
@@ -432,7 +432,7 @@
                 </button>
             </div>
         </form>
-        <p id="disable-error" class="text-sm text-red-400 mt-2 hidden"></p>
+        <p id="disable-error" class="text-sm text-[var(--danger-text)] mt-2 hidden"></p>
     </div>
 </div>
 
@@ -629,14 +629,14 @@ document.addEventListener('DOMContentLoaded', function() {
             document.getElementById('auth-source-badge').textContent = data.auth_source || 'OIDC';
             var roleEl = document.getElementById('role-badge');
             var roleColors = {
-                admin: 'bg-gray-700 text-gray-300 border-gray-600',
-                poweruser: 'bg-amber-900/50 text-amber-300 border-amber-800',
-                operator: 'bg-blue-900/50 text-blue-300 border-blue-800',
-                viewer: 'bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border)]'
+                admin: 'badge badge-role-admin',
+                poweruser: 'badge badge-role-poweruser',
+                operator: 'badge badge-role-operator',
+                viewer: 'badge badge-role-viewer'
             };
             var role = data.role || 'viewer';
             roleEl.textContent = role;
-            roleEl.className = 'inline-block px-2 py-0.5 text-xs rounded border ' + (roleColors[role] || roleColors.viewer);
+            roleEl.className = roleColors[role] || roleColors.viewer;
             // Member Since: the API returns a raw ISO timestamp; format
             // it in the user's locale instead of rendering it verbatim.
             var createdRaw = data.created_at;
@@ -667,7 +667,7 @@ document.addEventListener('DOMContentLoaded', function() {
             var currentPw = document.getElementById('email-current-password').value;
             if (!currentPw) {
                 status.textContent = 'Enter your current password to change your email';
-                status.className = 'ml-3 text-sm text-red-400';
+                status.className = 'ml-3 text-sm text-[var(--danger-text)]';
                 status.classList.remove('hidden');
                 setTimeout(function() { status.classList.add('hidden'); }, 4000);
                 return;
@@ -695,19 +695,19 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(function(res) {
             if (res.ok) {
                 status.textContent = 'Saved!';
-                status.className = 'ml-3 text-sm text-emerald-400';
+                status.className = 'ml-3 text-sm text-[var(--success-text)]';
                 originalName = nameInput.value.trim();
                 originalEmail = emailInput.value.trim();
                 document.getElementById('email-current-password').value = '';
             } else {
                 status.textContent = res.data.error || 'Failed to save';
-                status.className = 'ml-3 text-sm text-red-400';
+                status.className = 'ml-3 text-sm text-[var(--danger-text)]';
             }
             setTimeout(function() { status.classList.add('hidden'); }, 4000);
         })
         .catch(function() {
             status.textContent = 'Network error';
-            status.className = 'ml-3 text-sm text-red-400';
+            status.className = 'ml-3 text-sm text-[var(--danger-text)]';
             setTimeout(function() { status.classList.add('hidden'); }, 3000);
         });
     });
@@ -721,7 +721,7 @@ document.addEventListener('DOMContentLoaded', function() {
         var confirm = document.getElementById('pw-confirm-password').value;
         if (next !== confirm) {
             status.textContent = 'New passwords do not match';
-            status.className = 'ml-3 text-sm text-red-400';
+            status.className = 'ml-3 text-sm text-[var(--danger-text)]';
             status.classList.remove('hidden');
             setTimeout(function() { status.classList.add('hidden'); }, 4000);
             return;
@@ -743,19 +743,19 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(function(res) {
             if (res.ok) {
                 status.textContent = 'Password changed';
-                status.className = 'ml-3 text-sm text-emerald-400';
+                status.className = 'ml-3 text-sm text-[var(--success-text)]';
                 document.getElementById('pw-current-password').value = '';
                 document.getElementById('pw-new-password').value = '';
                 document.getElementById('pw-confirm-password').value = '';
             } else {
                 status.textContent = res.data.error || 'Failed to change password';
-                status.className = 'ml-3 text-sm text-red-400';
+                status.className = 'ml-3 text-sm text-[var(--danger-text)]';
             }
             setTimeout(function() { status.classList.add('hidden'); }, 5000);
         })
         .catch(function() {
             status.textContent = 'Network error';
-            status.className = 'ml-3 text-sm text-red-400';
+            status.className = 'ml-3 text-sm text-[var(--danger-text)]';
             setTimeout(function() { status.classList.add('hidden'); }, 3000);
         })
         .then(function() {
@@ -768,7 +768,7 @@ document.addEventListener('DOMContentLoaded', function() {
     var credsStatus = document.getElementById('creds-status');
     function credsMsg(text, ok) {
         credsStatus.textContent = text;
-        credsStatus.className = 'text-sm ' + (ok === false ? 'text-red-400' : (ok === true ? 'text-emerald-400' : 'text-[var(--text-muted)]'));
+        credsStatus.className = 'text-sm ' + (ok === false ? 'text-[var(--danger-text)]' : (ok === true ? 'text-[var(--success-text)]' : 'text-[var(--text-muted)]'));
         credsStatus.classList.remove('hidden');
         setTimeout(function() { credsStatus.classList.add('hidden'); }, 4000);
     }
@@ -835,10 +835,10 @@ document.addEventListener('DOMContentLoaded', function() {
 // ── API Keys: tokens table, create modal, device pairing ──
 (function() {
     var roleColors = {
-        admin: 'bg-red-900/50 text-red-300 border-red-800',
-        poweruser: 'bg-purple-900/50 text-purple-300 border-purple-800',
-        operator: 'bg-blue-900/50 text-blue-300 border-blue-800',
-        viewer: 'bg-[var(--bg-hover)]/50 text-[var(--text-muted)] border-[var(--border)]'
+        admin: 'badge badge-role-admin',
+        poweruser: 'badge badge-role-poweruser',
+        operator: 'badge badge-role-operator',
+        viewer: 'badge badge-role-viewer'
     };
 
     function formatDate(d) {
@@ -862,19 +862,19 @@ document.addEventListener('DOMContentLoaded', function() {
                 var html = '';
                 tokens.forEach(function(t) {
                     var roleBadge = t.max_role
-                        ? '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ' + (roleColors[t.max_role] || roleColors.viewer) + '">' + escapeHtml(t.max_role) + '</span>'
+                        ? '<span class="' + (roleColors[t.max_role] || roleColors.viewer) + '">' + escapeHtml(t.max_role) + '</span>'
                         : '<span class="text-[var(--text-muted)]">—</span>';
-                    var statusClass = t.disabled ? 'bg-red-900/50 text-red-300' : 'bg-emerald-900/50 text-emerald-300';
+                    var statusClass = t.disabled ? 'badge badge-danger' : 'badge badge-success';
                     var statusText = t.disabled ? 'Revoked' : 'Active';
                     html += '<tr class="border-b border-[var(--border)]/50 hover:bg-[var(--bg-hover)]/30">';
                     html += '<td class="px-4 py-3 text-[var(--text-primary)] font-medium">' + escapeHtml(t.name) + '</td>';
                     html += '<td class="px-4 py-3">' + roleBadge + '</td>';
-                    html += '<td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ' + statusClass + '">' + statusText + '</span></td>';
+                    html += '<td class="px-4 py-3"><span class="' + statusClass + '">' + statusText + '</span></td>';
                     html += '<td class="px-4 py-3 text-[var(--text-muted)] text-xs">' + formatDate(t.created_at) + '</td>';
                     html += '<td class="px-4 py-3 text-[var(--text-muted)] text-xs">' + formatDate(t.last_used_at) + '</td>';
                     html += '<td class="px-4 py-3 text-right">';
                     if (!t.disabled) {
-                        html += '<button type="button" data-revoke-id="' + t.id + '" class="text-xs text-red-400 hover:text-red-300 transition-colors">Revoke</button>';
+                        html += '<button type="button" data-revoke-id="' + t.id + '" class="text-xs link-danger transition-colors">Revoke</button>';
                     }
                     html += '</td></tr>';
                 });
@@ -961,7 +961,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function showPairMessage(text, ok) {
         pairMessage.textContent = text;
-        pairMessage.className = 'mt-3 text-sm ' + (ok ? 'text-emerald-400' : 'text-red-400');
+        pairMessage.className = 'mt-3 text-sm ' + (ok ? 'text-[var(--success-text)]' : 'text-[var(--danger-text)]');
         pairMessage.classList.remove('hidden');
     }
 
@@ -1015,8 +1015,8 @@ document.addEventListener('DOMContentLoaded', function() {
         var recovery = document.getElementById('recovery-codes-section');
 
         if (enabled) {
-            icon.className = 'w-12 h-12 rounded-lg bg-emerald-900/50 border border-emerald-800 flex items-center justify-center shrink-0';
-            icon.innerHTML = '<svg class="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>';
+            icon.className = 'w-12 h-12 rounded-lg bg-[var(--bg-hover)] border border-[var(--border-strong)] flex items-center justify-center shrink-0';
+            icon.innerHTML = '<svg class="w-6 h-6 text-[var(--success-text)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>';
             title.textContent = 'Two-Factor Authentication Enabled';
             desc.textContent = 'Your account is protected with TOTP.';
             actions.innerHTML = '<button type="button" id="btn-show-recovery" class="btn btn-secondary btn-sm">View Recovery Codes</button>' +

@@ -229,22 +229,22 @@ function toggleUserStatus(email, currentStatus) {
 
 function roleBadge(user) {
     var colors = {
-        admin: 'bg-gray-700 text-gray-300 border-gray-600',
-        poweruser: 'bg-amber-900/50 text-amber-300 border-amber-800',
-        operator: 'bg-blue-900/50 text-blue-300 border-blue-800',
-        viewer: 'bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border)]'
+        admin: 'badge badge-role-admin',
+        poweruser: 'badge badge-role-poweruser',
+        operator: 'badge badge-role-operator',
+        viewer: 'badge badge-role-viewer'
     };
     if (user && user.custom_role && user.custom_role.name) {
         var safeCustom = escapeHtml(user.custom_role.name);
-        return '<span class="inline-block px-2 py-0.5 text-xs rounded border bg-purple-900/30 text-purple-300 border-purple-700">' + safeCustom + '</span>';
+        return '<span class="badge badge-role-custom">' + safeCustom + '</span>';
     }
     var role = (user && user.role) || 'viewer';
     var safeRole = escapeHtml(role);
-    return '<span class="inline-block px-2 py-0.5 text-xs rounded border ' + (colors[role] || colors.viewer) + '">' + safeRole + '</span>';
+    return '<span class="' + (colors[role] || colors.viewer) + '">' + safeRole + '</span>';
 }
 
 function renderUserRow(user) {
-    var statusClass = user.disabled ? 'text-red-400' : 'text-emerald-400';
+    var statusClass = user.disabled ? 'text-[var(--danger-text)]' : 'text-[var(--success-text)]';
     var statusText = user.disabled ? 'Disabled' : 'Active';
     var toggleLabel = user.disabled ? 'Enable' : 'Disable';
     var statusLower = statusText.toLowerCase();
@@ -304,7 +304,7 @@ function loadUsers() {
             renderUsers();
         })
         .catch(function() {
-            tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-red-400 text-sm">Failed to load users</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-[var(--danger-text)] text-sm">Failed to load users</td></tr>';
         });
 }
 

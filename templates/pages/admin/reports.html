@@ -22,7 +22,7 @@
         </div>
         <div class="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-5">
             <div class="text-sm text-[var(--text-muted)] mb-1">Active Sessions</div>
-            <div id="stat-active-sessions" class="text-3xl font-bold text-emerald-400">—</div>
+            <div id="stat-active-sessions" class="text-3xl font-bold accent-text">—</div>
         </div>
         <div class="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-5">
             <div class="text-sm text-[var(--text-muted)] mb-1">Total Users</div>
@@ -226,10 +226,10 @@ fetch('/api/reports/sessions?limit=20').then(function(r) { return r.json(); }).t
         var duration = formatDuration(s.duration_secs);
         var started = s.started_at ? s.started_at.replace('T', ' ').slice(0, 19) : '—';
         var protoColors = {
-            SSH: 'bg-green-900/50 text-green-300 border-green-800',
-            RDP: 'bg-blue-900/50 text-blue-300 border-blue-800',
-            VNC: 'bg-orange-900/50 text-orange-300 border-orange-800',
-            SPICE: 'bg-purple-900/50 text-purple-300 border-purple-800',
+            SSH: 'proto-ssh',
+            RDP: 'proto-rdp',
+            VNC: 'proto-vnc',
+            SPICE: 'proto-spice',
         };
         var colorClass = protoColors[proto] || 'bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border)]';
         return '<tr class="hover:bg-[var(--bg-hover)]/50">' +
