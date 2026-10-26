@@ -1760,8 +1760,10 @@
                     return;
                 }
                 var tries = 0;
+                var headers = {};
+                if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
                 (function poll() {
-                    fetch('/api/sessions/' + sessionId + '/drive-files', { headers: apiHeaders(), credentials: 'same-origin' })
+                    fetch('/api/sessions/' + sessionId + '/drive-files', { headers: headers, credentials: 'same-origin' })
                         .then(function(r) { return r.ok ? r.json() : []; })
                         .then(function(entries) {
                             var found = (entries || []).some(function(en) { return en.name === name; });
