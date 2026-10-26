@@ -259,13 +259,13 @@
     }
 
     async function deleteJumpHost(id) {
-        if (!confirm('Delete this jump host?')) return;
+        if (!(await uiConfirm('Delete this jump host?', { danger: true, confirmLabel: 'Delete' }))) return;
         try {
             await fetch(`/api/admin/jump-hosts/${id}`, { method: 'DELETE' });
             if (selectedHostId === id) { selectedHostId = null; document.getElementById('jump-host-details').innerHTML = '<p class="text-[var(--text-muted)] text-sm">Select a jump host to view details</p>'; }
             await loadJumpHosts();
         } catch (e) {
-            alert('Failed to delete: ' + e.message);
+            uiAlert('Failed to delete: ' + e.message, { danger: true });
         }
     }
 

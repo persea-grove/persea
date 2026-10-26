@@ -813,8 +813,8 @@ document.addEventListener('DOMContentLoaded', function() {
             saveBtn.textContent = 'Save Credentials';
         });
     });
-    document.getElementById('creds-clear').addEventListener('click', function() {
-        if (!confirm('Clear your preset credentials?')) return;
+    document.getElementById('creds-clear').addEventListener('click', async function() {
+        if (!(await uiConfirm('Clear your preset credentials?', { danger: true, confirmLabel: 'Clear' }))) return;
         fetch('/api/me/preset-credentials', {
             method: 'PUT',
             headers: apiHeaders(),
@@ -890,8 +890,8 @@ document.addEventListener('DOMContentLoaded', function() {
             .catch(function() {});
     }
 
-    function revokeToken(id) {
-        if (!confirm('Revoke this token? It will stop working immediately.')) return;
+    async function revokeToken(id) {
+        if (!(await uiConfirm('Revoke this token? It will stop working immediately.', { danger: true, confirmLabel: 'Revoke' }))) return;
         fetch('/api/me/tokens/' + id, { method: 'DELETE', headers: apiHeaders() })
             .then(function(r) { if (r.ok) loadTokens(); });
     }

@@ -333,11 +333,11 @@ function testProviderConnection(id) {
             if (!r) { return; }
             alert(r.ok ? 'Connection successful' : 'Connection failed: ' + (r.detail || 'unknown error'));
         })
-        .catch(function() { alert('Connection test failed (network error)'); });
+        .catch(function() { uiAlert('Connection test failed (network error)', { danger: true }); });
 }
 
-function deleteProvider(id) {
-    if (!confirm('Delete this auth provider?')) return;
+async function deleteProvider(id) {
+    if (!(await uiConfirm('Delete this auth provider?', { danger: true, confirmLabel: 'Delete' }))) return;
     fetch('/api/auth/providers/' + id, { method: 'DELETE', headers: apiHeaders() })
         .then(function() { loadProviders(); });
 }

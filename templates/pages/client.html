@@ -900,9 +900,9 @@
                 close.textContent = '\u00D7';
                 close.title = 'Terminate this session';
                 close.setAttribute('aria-label', 'Terminate session');
-                close.addEventListener('click', function(ev) {
+                close.addEventListener('click', async function(ev) {
                     ev.stopPropagation();
-                    if (!confirm('Terminate this session?')) return;
+                    if (!(await uiConfirm('Terminate this session?', { danger: true, confirmLabel: 'Terminate' }))) return;
                     terminateSession(s.session_id).then(function() {
                         if (s.session_id === sessionId) closeOrNavigate();
                         else loadTabs();
@@ -1104,8 +1104,8 @@
         // V10: Disconnect only drops the browser connection — the session
         // stays in the manager as `disconnected` and can be reconnected
         // later. Logout (below) is the destructive end.
-        document.getElementById('btn-disconnect').addEventListener('click', function() {
-            if (!confirm('Disconnect from this session? The session stays available — you can reconnect later.')) return;
+        document.getElementById('btn-disconnect').addEventListener('click', async function() {
+            if (!(await uiConfirm('Disconnect from this session? The session stays available — you can reconnect later.', { confirmLabel: 'Disconnect' }))) return;
             userDisconnected = true;
             if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
             try { if (window.__guac_client) window.__guac_client.disconnect(); } catch (e) {}
@@ -1113,8 +1113,8 @@
         });
 
         // ── Log Out (destroy session entirely) ──
-        document.getElementById('btn-logout').addEventListener('click', function() {
-            if (!confirm('Log out and destroy this session? You will not be able to reconnect.')) return;
+        document.getElementById('btn-logout').addEventListener('click', async function() {
+            if (!(await uiConfirm('Log out and destroy this session? You will not be able to reconnect.', { danger: true, confirmLabel: 'Log Out' }))) return;
             userDisconnected = true;
             if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
             var headers = {};

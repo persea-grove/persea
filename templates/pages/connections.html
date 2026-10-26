@@ -1135,7 +1135,7 @@
             loadPersonalFolders().then(function() { renderFolders(); });
         });
     }
-    function deletePersonalFolder(folder) {
+    async function deletePersonalFolder(folder) {
         var affected = folders.filter(function(f) {
             return f.scope === 'personal' && (f.path === folder.path || f.path.startsWith(folder.path + '/'));
         });
@@ -1143,7 +1143,7 @@
         var warning = affected.length > 1
             ? 'Delete personal folder "' + folder.path + '" and its ' + (affected.length - 1) + ' subfolder(s)?\n\nEntry references are removed; the shared entries themselves are untouched.'
             : 'Delete personal folder "' + folder.path + '"?\n\nEntry references are removed; the shared entries themselves are untouched.';
-        if (!confirm(warning)) return;
+        if (!(await uiConfirm(warning, { danger: true, confirmLabel: 'Delete' }))) return;
         var chain = Promise.resolve();
         affected.forEach(function(f) {
             chain = chain.then(function() {
@@ -2652,13 +2652,13 @@
             saveBtn.textContent = 'Save';
         });
     }
-    function deleteFolder() {
+    async function deleteFolder() {
         if (!selectedFolder) return;
         var selPath = selectedFolder.path;
         var warning = selectedFolder.has_children
             ? 'Delete folder "' + selPath + '" AND all its subfolders and entries?\n\nThis recursively removes the entire subtree and cannot be undone.'
             : 'Delete folder "' + selPath + '" and all its entries?\n\nThis cannot be undone.';
-        if (!confirm(warning)) return;
+        if (!(await uiConfirm(warning, { danger: true, confirmLabel: 'Delete' }))) return;
         fetch('/api/addressbook/folders/' + encodeURIComponent(selectedFolder.scope) + '/' + encodeURIComponent(selPath), {
             method: 'DELETE',
             headers: apiHeaders(),
@@ -3229,10 +3229,10 @@
             saveBtn.textContent = entrySaveLabel();
         });
     }
-    function deleteEntry() {
+    async function deleteEntry() {
         if (!selectedFolder || !selectedEntry) return;
         var name = selectedEntry.name;
-        if (!confirm('Delete entry "' + name + '"?')) return;
+        if (!(await uiConfirm('Delete entry "' + name + '"?', { danger: true, confirmLabel: 'Delete' }))) return;
         fetch('/api/addressbook/folders/' + encodeURIComponent(selectedFolder.scope) + '/' + encodeURIComponent(selectedFolder.path) + '/entries/' + encodeURIComponent(name), {
             method: 'DELETE',
             headers: apiHeaders(),
@@ -3249,11 +3249,11 @@
     }
 
     // ── Credential rotation ───────────────────────────────────────────
-    function rotateCredential() {
+    async function rotateCredential() {
         if (!selectedFolder || !selectedEntry) return;
         var entryName = selectedEntry.name;
         var displayName = selectedEntry.display_name || entryName;
-        if (!confirm('Generate new credential for "' + displayName + '"?\nThe old credential will be replaced.')) return;
+        if (!(await uiConfirm('Generate new credential for "' + displayName + '"?\nThe old credential will be replaced.', { confirmLabel: 'Generate' }))) return;
         var newPw = generatePassword();
         var url = '/api/addressbook/folders/' + encodeURIComponent(selectedFolder.scope) + '/' + encodeURIComponent(selectedFolder.path) + '/entries/' + encodeURIComponent(entryName);
         fetch(url, {

@@ -299,9 +299,9 @@
                 + '</tr>';
         }).join('');
         listEl.querySelectorAll('.session-terminate').forEach(function(btn) {
-            btn.addEventListener('click', function() {
+            btn.addEventListener('click', async function() {
                 var id = btn.getAttribute('data-id');
-                if (!confirm('Terminate session ' + id.slice(0, 8) + '?')) return;
+                if (!(await uiConfirm('Terminate session ' + id.slice(0, 8) + '?', { danger: true, confirmLabel: 'Terminate' }))) return;
                 fetch('/api/sessions/' + encodeURIComponent(id), {
                     method: 'DELETE',
                     headers: apiHeaders(),
