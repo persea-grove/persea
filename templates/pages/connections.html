@@ -79,13 +79,18 @@
     <!-- Main content (hidden by default) -->
     <div id="main-content" class="hidden">
 
-        <!-- Recent sessions -->
-        <div id="recent-sessions" class="hidden" style="margin-bottom:24px">
-            <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-                <h2 style="font-size:12px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin:0">Recently Connected</h2>
-                <span id="recent-count" style="padding:2px 8px;background:var(--bg-input);color:var(--text-muted);font-size:11px;border-radius:12px"></span>
+        <!-- Recent sessions: a compact strip. The full history lives behind
+             "View all" (modal) so a long history can never push the address
+             book below the fold; the strip itself stays one row and scrolls
+             horizontally. -->
+        <div id="recent-sessions" class="hidden recent-bar">
+            <div class="recent-bar-head">
+                <h2 class="recent-bar-title">Recently Connected</h2>
+                <span id="recent-count" class="recent-count"></span>
+                <div class="recent-bar-spacer"></div>
+                <button type="button" id="recent-view-all" class="btn btn-secondary btn-sm" style="width:auto">View all</button>
             </div>
-            <div id="recent-list" style="display:flex;flex-direction:column;gap:8px"></div>
+            <div id="recent-strip" class="recent-strip"></div>
         </div>
 
         <!-- Active sessions (wired to GET /api/sessions) -->
@@ -641,6 +646,19 @@
     </div>
 </div>
 
+<!-- Recently Connected: full history (modal) -->
+<div id="recent-modal" class="modal-overlay hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="recent-modal-title">
+    <div class="card w-full max-w-2xl" style="max-height:80vh;display:flex;flex-direction:column">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+            <h2 id="recent-modal-title" style="font-size:16px;font-weight:600;color:var(--text-primary);margin:0">Recently Connected</h2>
+            <span id="recent-modal-count" class="recent-count"></span>
+            <div style="flex:1"></div>
+            <button type="button" id="recent-modal-close" class="btn btn-secondary btn-sm" style="width:auto">Close</button>
+        </div>
+        <div id="recent-modal-list" class="recent-modal-list"></div>
+    </div>
+</div>
+
 <!-- Import CSV modal -->
 <div id="import-modal" class="modal-overlay hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="import-modal-title">
     <div class="card w-full max-w-md">
@@ -697,6 +715,21 @@
     .admin-only.admin-visible { display: inline-flex; }
     .recent-row { display:flex;align-items:center;padding:10px 12px;border-radius:8px;background:var(--bg-card);border:1px solid var(--border);gap:12px;transition:all 0.15s }
     .recent-row:hover { background:var(--bg-hover);border-color:var(--border-focus) }
+    /* Recently Connected: fixed-height strip + modal. The strip is one row no
+       matter how long the history gets, so the address book keeps the page. */
+    .recent-bar { margin-bottom:20px }
+    .recent-bar-head { display:flex;align-items:center;gap:10px;margin-bottom:8px }
+    .recent-bar-title { font-size:12px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin:0 }
+    .recent-bar-spacer { flex:1 }
+    .recent-count { padding:2px 8px;background:var(--bg-input);color:var(--text-muted);font-size:11px;border-radius:12px }
+    .recent-strip { display:flex;align-items:center;gap:8px;overflow-x:auto;overflow-y:hidden;padding-bottom:4px;scrollbar-width:thin;min-height:38px }
+    .recent-chip { display:flex;align-items:center;gap:8px;flex:0 0 auto;max-width:280px;height:34px;padding:0 10px;border-radius:8px;background:var(--bg-card);border:1px solid var(--border);cursor:pointer;transition:all 0.15s;font:inherit;color:inherit }
+    .recent-chip:hover { background:var(--bg-hover);border-color:var(--border-focus) }
+    .recent-chip:disabled { opacity:0.6;cursor:default }
+    .recent-chip-name { font-size:12px;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px }
+    .recent-chip-more { font-size:12px;color:var(--text-muted);border-style:dashed }
+    .recent-chip-more:hover { color:var(--text-primary) }
+    .recent-modal-list { display:flex;flex-direction:column;gap:8px;overflow-y:auto;padding-right:4px;min-height:0 }
     .status-pill { padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid }
     .status-active { background:rgba(52,211,153,.12);color:#34d399;border-color:rgba(52,211,153,.3) }
     .status-pending { background:rgba(240,192,64,.12);color:#f0c040;border-color:rgba(240,192,64,.3) }
@@ -3967,52 +4000,114 @@
     // an address-book entry relaunch through the connect endpoint (the
     // same path as the client page's Reconnect button). Ad-hoc sessions
     // cannot be relaunched, so their button is omitted.
+    var RECENT_STRIP_MAX = 6;   // chips shown before the "+N more" chip
+    var RECENT_STATUS_CLASS = {
+        active: 'status-active', pending: 'status-pending',
+        disconnected: 'status-disconnected', logged_out: 'status-logged_out'
+    };
+
+    // Action attributes shared by chips and rows: live sessions rejoin the
+    // session page, ended sessions relaunch the entry they came from.
+    function recentActionAttrs(s) {
+        var live = s.status === 'active' || s.status === 'pending' || s.status === 'disconnected';
+        var relaunchable = !!s.address_book_entry && !!s.address_book_folder;
+        if (live) return ' data-session-id="' + escapeAttr(s.session_id) + '"';
+        if (relaunchable) {
+            return ' data-relaunch="' + escapeAttr(s.session_id) + '"'
+                + ' data-address-book-entry="' + escapeAttr(s.address_book_entry || '') + '"'
+                + ' data-address-book-folder="' + escapeAttr(s.address_book_folder || '') + '"';
+        }
+        return '';
+    }
+
+    // One compact chip for the strip: proto badge, name, status. The whole
+    // chip is the action (rejoin or relaunch); non-actionable rows are inert.
+    function recentChipHtml(s) {
+        var proto = (s.session_type || '').toLowerCase();
+        var sc = RECENT_STATUS_CLASS[s.status] || 'status-completed';
+        var name = s.entry_display_name || s.hostname || s.session_id;
+        var target = s.url || s.hostname || '\u2014';
+        var attrs = recentActionAttrs(s);
+        var inner = '<span class="' + protoClass(proto) + '" style="padding:1px 6px;font-size:10px;font-weight:500;border-radius:5px;border:1px solid;flex-shrink:0">' + escapeHtml((proto || '?').toUpperCase()) + '</span>'
+            + '<span class="recent-chip-name">' + escapeHtml(name) + '</span>'
+            + '<span class="status-pill ' + sc + '" style="padding:1px 6px;font-size:10px">' + escapeHtml((s.status || 'unknown').toUpperCase()) + '</span>';
+        if (!attrs) {
+            return '<span class="recent-chip" title="' + escapeAttr(name + ' \u00B7 ' + target) + '">' + inner + '</span>';
+        }
+        return '<button type="button" class="recent-chip"' + attrs + ' title="' + escapeAttr(name + ' \u00B7 ' + target) + '">' + inner + '</button>';
+    }
+
+    // One full-width row for the "View all" modal (the previous inline look).
+    function recentRowHtml(s) {
+        var proto = (s.session_type || '').toLowerCase();
+        var target = s.url || s.hostname || '\u2014';
+        var sc = RECENT_STATUS_CLASS[s.status] || 'status-completed';
+        var name = s.entry_display_name || s.hostname || s.session_id;
+        var statusLabel = (s.status || 'unknown').toUpperCase();
+        var live = s.status === 'active' || s.status === 'pending' || s.status === 'disconnected';
+        var relaunchable = !!s.address_book_entry && !!s.address_book_folder;
+        var btn = live
+            ? '<button class="btn btn-primary btn-sm" data-session-id="' + escapeAttr(s.session_id) + '" style="width:auto">Reconnect</button>'
+            : (relaunchable
+                ? '<button class="btn btn-primary btn-sm" data-relaunch="' + escapeAttr(s.session_id) + '" style="width:auto">Reconnect</button>'
+                : '');
+        var reason = s.reason
+            ? '<div style="font-size:11px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escapeAttr(s.reason) + '">' + escapeHtml(s.reason) + '</div>'
+            : '';
+        return '<div class="recent-row" data-address-book-entry="' + escapeAttr(s.address_book_entry || '') + '" data-address-book-folder="' + escapeAttr(s.address_book_folder || '') + '" data-session-id="' + escapeAttr(s.session_id) + '">'
+            + '<span class="' + protoClass(proto) + '" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid;flex-shrink:0">' + escapeHtml((proto || '?').toUpperCase()) + '</span>'
+            + '<div style="flex:1;min-width:0">'
+            + '<div style="font-size:13px;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(name) + '</div>'
+            + '<div style="font-size:12px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(target) + ' \u00B7 ' + escapeHtml(s.started_at || '') + '</div>'
+            + reason
+            + '</div>'
+            + '<span class="status-pill ' + sc + '">' + escapeHtml(statusLabel) + '</span>'
+            + btn
+            + '</div>';
+    }
+
+    function openRecentModal() {
+        document.getElementById('recent-modal').classList.remove('hidden');
+    }
+    function closeRecentModal() {
+        document.getElementById('recent-modal').classList.add('hidden');
+    }
+    document.getElementById('recent-view-all').addEventListener('click', openRecentModal);
+    document.getElementById('recent-modal-close').addEventListener('click', closeRecentModal);
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') closeRecentModal();
+    });
+
+    function renderRecent(sessions) {
+        var section = document.getElementById('recent-sessions');
+        if (!sessions || sessions.length === 0) {
+            section.classList.add('hidden');
+            return;
+        }
+        section.classList.remove('hidden');
+        document.getElementById('recent-count').textContent = sessions.length;
+        document.getElementById('recent-modal-count').textContent = sessions.length;
+
+        // Strip: one row, never taller. Overflow scrolls horizontally and the
+        // rest of the history stays behind "View all".
+        var strip = document.getElementById('recent-strip');
+        var shown = sessions.slice(0, RECENT_STRIP_MAX);
+        var html = shown.map(recentChipHtml).join('');
+        var extra = sessions.length - shown.length;
+        if (extra > 0) {
+            html += '<button type="button" class="recent-chip recent-chip-more" id="recent-more-chip">+' + extra + ' more</button>';
+        }
+        strip.innerHTML = html;
+        var more = document.getElementById('recent-more-chip');
+        if (more) more.addEventListener('click', openRecentModal);
+
+        document.getElementById('recent-modal-list').innerHTML = sessions.map(recentRowHtml).join('');
+    }
+
     function loadRecentSessions() {
         fetch('/api/sessions/recent', { headers: apiHeaders(), credentials: 'same-origin' })
             .then(function(r) { return r.ok ? r.json() : null; })
-            .then(function(data) {
-                var list = document.getElementById('recent-list');
-                var section = document.getElementById('recent-sessions');
-                var countEl = document.getElementById('recent-count');
-                var sessions = (data && data.recent) || [];
-                if (!sessions || sessions.length === 0) {
-                    section.classList.add('hidden');
-                    return;
-                }
-                section.classList.remove('hidden');
-                countEl.textContent = sessions.length;
-                var statusClass = {
-                    active: 'status-active', pending: 'status-pending',
-                    disconnected: 'status-disconnected', logged_out: 'status-logged_out'
-                };
-                list.innerHTML = sessions.map(function(s) {
-                    var proto = (s.session_type || '').toLowerCase();
-                    var target = s.url || s.hostname || '\u2014';
-                    var sc = statusClass[s.status] || 'status-completed';
-                    var name = s.entry_display_name || s.hostname || s.session_id;
-                    var statusLabel = (s.status || 'unknown').toUpperCase();
-                    var live = s.status === 'active' || s.status === 'pending' || s.status === 'disconnected';
-                    var relaunchable = !!s.address_book_entry && !!s.address_book_folder;
-                    var btn = live
-                        ? '<button class="btn btn-primary btn-sm" data-session-id="' + escapeAttr(s.session_id) + '" style="width:auto">Reconnect</button>'
-                        : (relaunchable
-                            ? '<button class="btn btn-primary btn-sm" data-relaunch="' + escapeAttr(s.session_id) + '" style="width:auto">Reconnect</button>'
-                            : '');
-                    var reason = s.reason
-                        ? '<div style="font-size:11px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escapeAttr(s.reason) + '">' + escapeHtml(s.reason) + '</div>'
-                        : '';
-                    return '<div class="recent-row" data-address-book-entry="' + escapeAttr(s.address_book_entry || '') + '" data-address-book-folder="' + escapeAttr(s.address_book_folder || '') + '" data-session-id="' + escapeAttr(s.session_id) + '">'
-                        + '<span class="' + protoClass(proto) + '" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid;flex-shrink:0">' + escapeHtml((proto || '?').toUpperCase()) + '</span>'
-                        + '<div style="flex:1;min-width:0">'
-                        + '<div style="font-size:13px;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(name) + '</div>'
-                        + '<div style="font-size:12px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(target) + ' \u00B7 ' + escapeHtml(s.started_at || '') + '</div>'
-                        + reason
-                        + '</div>'
-                        + '<span class="status-pill ' + sc + '">' + escapeHtml(statusLabel) + '</span>'
-                        + btn
-                        + '</div>';
-                }).join('');
-            })
+            .then(function(data) { renderRecent((data && data.recent) || []); })
             .catch(function() {
                 document.getElementById('recent-sessions').classList.add('hidden');
             });
@@ -4038,7 +4133,7 @@
         var scope = entryKey.substring(0, firstSlash);
         var entry = entryKey.substring(lastSlash + 1);
         btn.disabled = true;
-        btn.textContent = 'Reconnecting\u2026';
+        if (btn.classList.contains('btn')) btn.textContent = 'Reconnecting\u2026';
         fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries/' + encodeURIComponent(entry) + '/connect', {
             method: 'POST',
             headers: apiHeaders(),
@@ -4046,15 +4141,15 @@
             body: JSON.stringify({ width: window.innerWidth, height: window.innerHeight, dpi: Math.round((window.devicePixelRatio || 1) * 96) })
         })
         .then(function(res) {
-            if (!res.ok) { btn.disabled = false; btn.textContent = 'Reconnect'; return; }
+            if (!res.ok) { btn.disabled = false; if (btn.classList.contains('btn')) btn.textContent = 'Reconnect'; return; }
             return res.json().then(function(d) {
-                if (!d.client_url) { btn.disabled = false; btn.textContent = 'Reconnect'; return; }
+                if (!d.client_url) { btn.disabled = false; if (btn.classList.contains('btn')) btn.textContent = 'Reconnect'; return; }
                 openSessionUrl(d.client_url);
             });
         })
-        .catch(function() { btn.disabled = false; btn.textContent = 'Reconnect'; });
+        .catch(function() { btn.disabled = false; if (btn.classList.contains('btn')) btn.textContent = 'Reconnect'; });
     }
-    document.getElementById('recent-list').addEventListener('click', handleSessionAction);
+    document.getElementById('recent-strip').addEventListener('click', handleSessionAction);
     document.getElementById('active-sessions-grid').addEventListener('click', handleSessionAction);
 
     // ── Active Sessions ────────────────────────────────────────────

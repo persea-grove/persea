@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The connections page keeps the address book in view: Recently Connected is
+  a single-row strip whose overflow lives behind a **View all** dialog, so a
+  long history can no longer push the folders and entries below the fold.
 - Web entry `allowed_domains` is now editable in the entry form, with an
   explicit warning while the list is empty. The server also logs a warning
   when a web session starts with no allowed domains.
