@@ -1532,7 +1532,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
     font-family: var(--font-sans);
     font-weight: 500;
 }
-.filter-chip-clear-all:hover { background: rgba(16,185,129,0.1); } (feat: consolidate connections page top bar (persea#215))
+.filter-chip-clear-all:hover { background: rgba(16,185,129,0.1); }
 
 /* ── Skip-to-content link (persea#286, WCAG 2.4.1) ────────────────
    Visually hidden until focused, then revealed at the top-left.
