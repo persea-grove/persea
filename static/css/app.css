@@ -250,7 +250,7 @@ body {
 }
 
 .nav-item.active {
-    color: var(--accent);
+    color: var(--accent-text);
     background: rgba(16,185,129,0.08);
     font-weight: 700;
 }
@@ -1095,7 +1095,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 /* ── TOC (docs.html) ─────────────────────────────────────── */
 .toc-link { display: block; padding: 4px 12px; font-size: var(--text-base); color: var(--text-secondary); text-decoration: none; border-left: 2px solid transparent; transition: all 0.15s; }
 .toc-link:hover { color: var(--text-primary); border-left-color: var(--border); }
-.toc-link.active { color: var(--accent); border-left-color: var(--accent); }
+.toc-link.active { color: var(--accent-text); border-left-color: var(--accent); }
 
 /* Two-level docs nav: each doc is a collapsible group (details/summary)
    whose summary carries the doc link and whose body lists its h2/h3
@@ -1188,7 +1188,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 /* ── Color preset menu ──────────────────────────────────── */
 .um-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: var(--text-base); color: var(--text-secondary); transition: background 0.15s; }
 .um-item:hover { background: var(--bg-hover); color: var(--text-primary); }
-.um-item.active { background: rgba(16,185,129,0.1); color: var(--accent); }
+.um-item.active { background: rgba(16,185,129,0.1); color: var(--accent-text); }
 .um-swatch { width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0; border: 2px solid var(--border); }
 .um-item.active .um-swatch { border-color: var(--accent); }
 .um-theme-info { display: flex; flex-direction: column; gap: 1px; }
@@ -1357,7 +1357,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
    which read as a second idiom. Both now use the same green-tinted block
    plus green text (the block's top corners round into the tab bar rule). */
 .page-tab[aria-selected="true"], .settings-tab[aria-selected="true"] {
-    color: var(--accent);
+    color: var(--accent-text);
     border-bottom-color: transparent;
     background-color: rgba(16,185,129,0.08);
     border-radius: 8px 8px 0 0;
@@ -1402,7 +1402,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
     outline-offset: -2px;
 }
 .page-rail-tab[aria-selected="true"], .settings-rail-tab[aria-selected="true"] {
-    color: var(--accent);
+    color: var(--accent-text);
     border-left-color: var(--accent);
     background-color: rgba(16,185,129,0.08);
 }
@@ -1504,11 +1504,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
     font-size: 14px;
     line-height: 1;
 }
-.filter-chip-remove:hover { color: var(--accent); }
+.filter-chip-remove:hover { color: var(--accent-text); }
 .filter-chip-clear-all {
     background: transparent;
     border-color: var(--accent);
-    color: var(--accent);
+    color: var(--accent-text);
     cursor: pointer;
     font-family: var(--font-sans);
     font-weight: 500;
