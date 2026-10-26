@@ -100,7 +100,7 @@ jobs:
           dpkg-buildpackage -us -uc -b
           cp ../*.deb .
       - name: Upload .deb
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: deb-amd64
           path: "*.deb"
@@ -153,7 +153,7 @@ jobs:
           dpkg-buildpackage -us -uc -b
           cp ../*.deb .
       - name: Upload .deb
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: deb-arm64
           path: "*.deb"
@@ -220,7 +220,7 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/rpm-artifacts"
           cp "$HOME/rpmbuild"/RPMS/*/*.rpm "$GITHUB_WORKSPACE/rpm-artifacts/"
       - name: Upload RPM
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: rpm-el10
           path: "rpm-artifacts/**/*.rpm"
@@ -320,7 +320,7 @@ jobs:
           cp target/x86_64-pc-windows-msvc/release/persea.exe dist/
           cp target/x86_64-pc-windows-msvc/release/persea.pdb dist/
       - name: Upload Windows artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: windows-x64
           path: dist/*
@@ -407,7 +407,7 @@ jobs:
           TAG="${GITHUB_REF_NAME#v}"
           cd /tmp && zip -r "$GITHUB_WORKSPACE/persea-${TAG}-linux-amd64.zip" "persea-${TAG}-linux-amd64"
       - name: Upload packages
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: packages-amd64
           path: |
@@ -458,7 +458,7 @@ jobs:
           TAG="${GITHUB_REF_NAME#v}"
           cd /tmp && zip -r "$GITHUB_WORKSPACE/persea-${TAG}-linux-arm64.zip" "persea-${TAG}-linux-arm64"
       - name: Upload packages
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: packages-arm64
           path: |
