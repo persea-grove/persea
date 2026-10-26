@@ -1249,6 +1249,29 @@ use crate::csrf::SecureCookies;
 /// Whether TLS is enabled (used by security headers middleware).
 use crate::csrf::TlsEnabled;
 
+/// HTML, CSS and JS must revalidate before reuse. Without an explicit
+/// Cache-Control, browsers and webviews apply heuristic freshness (a slice of
+/// the file's age) and can keep serving a stale stylesheet for hours — which
+/// is how a theme fix shipped while the desktop app (WebKitGTK) kept painting
+/// native selects from an old app.css. `no-cache` keeps the ETag path (304s)
+/// so the cost is one conditional request per asset per load.
+async fn cache_control(request: Request, next: middleware::Next) -> Response {
+    let revalidate = {
+        let path = request.uri().path();
+        path == "/"
+            || path.ends_with(".html")
+            || path.ends_with(".css")
+            || path.ends_with(".js")
+    };
+    let mut response = next.run(request).await;
+    if revalidate && response.status().is_success() {
+        response
+            .headers_mut()
+            .insert("Cache-Control", "no-cache".parse().unwrap());
+    }
+    response
+}
+
 async fn security_headers(
     _tls: Extension<TlsEnabled>,
     request: Request,
@@ -2980,6 +3003,7 @@ async fn run_server(
         .layer(DefaultBodyLimit::max(64 * 1024)) // 64 KB max request body
         .layer(middleware::from_fn(error_pages))
         .layer(middleware::from_fn(security_headers))
+        .layer(middleware::from_fn(cache_control))
         .layer(Extension(tls_enabled))
         .layer(Extension(oidc_enabled))
         .layer(Extension(oidc_provider_names))
