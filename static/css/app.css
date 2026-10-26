@@ -2,6 +2,7 @@
 /* Dark-first, clean, professional */
 
 :root {
+    color-scheme: dark;
     --bg-primary: #0a0f1a;
     --bg-secondary: #111827;
     --bg-card: #1a2332;
@@ -55,6 +56,7 @@
 }
 
 .light {
+    color-scheme: light;
     --bg-primary: #f8fafc;
     --bg-secondary: #ffffff;
     --bg-card: #ffffff;
@@ -456,6 +458,23 @@ body {
 /* Fixed-width filter selects (Users admin page) — loaded after Tailwind and
    declared after .form-input above, so this wins over both. */
 .form-input.w-40 { width: 10rem; }
+
+/* Native <select> chrome ignores the page palette in WebKitGTK. Drop the
+   native appearance and draw the chevron ourselves so the closed control is
+   always the theme's input colour; `color-scheme` above handles the popup. */
+select.form-input {
+    -webkit-appearance: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='none' stroke='%2394a3b8' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' d='M1 1.5 6 6.5 11 1.5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    background-size: 12px 8px;
+    padding-right: 36px;
+}
+select.form-input option {
+    background-color: var(--bg-card);
+    color: var(--text-primary);
+}
 
 /* ── Buttons ─────────────────────────────────────────────── */
 .btn {
