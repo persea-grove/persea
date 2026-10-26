@@ -715,6 +715,7 @@
     .admin-only.admin-visible { display: inline-flex; }
     .recent-row { display:flex;align-items:center;padding:10px 12px;border-radius:8px;background:var(--bg-card);border:1px solid var(--border);gap:12px;transition:all 0.15s }
     .recent-row:hover { background:var(--bg-hover);border-color:var(--border-focus) }
+    .recent-row-clickable { cursor:pointer }
     /* Recently Connected: fixed-height strip + modal. The strip is one row no
        matter how long the history gets, so the address book keeps the page. */
     .recent-bar { margin-bottom:20px }
@@ -4048,7 +4049,8 @@
         var reason = s.reason
             ? '<div style="font-size:11px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escapeAttr(s.reason) + '">' + escapeHtml(s.reason) + '</div>'
             : '';
-        return '<div class="recent-row" data-address-book-entry="' + escapeAttr(s.address_book_entry || '') + '" data-address-book-folder="' + escapeAttr(s.address_book_folder || '') + '" data-session-id="' + escapeAttr(s.session_id) + '">'
+        var rowAttrs = recentActionAttrs(s);
+        return '<div class="recent-row' + (rowAttrs ? ' recent-row-clickable' : '') + '"' + rowAttrs + '>'
             + '<span class="' + protoClass(proto) + '" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid;flex-shrink:0">' + escapeHtml((proto || '?').toUpperCase()) + '</span>'
             + '<div style="flex:1;min-width:0">'
             + '<div style="font-size:13px;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(name) + '</div>'
@@ -4144,6 +4146,7 @@
         .catch(function() { btn.disabled = false; if (btn.classList.contains('btn')) btn.textContent = 'Reconnect'; });
     }
     document.getElementById('recent-strip').addEventListener('click', handleSessionAction);
+    document.getElementById('recent-modal-list').addEventListener('click', handleSessionAction);
     document.getElementById('active-sessions-grid').addEventListener('click', handleSessionAction);
 
     // ── Active Sessions ────────────────────────────────────────────
