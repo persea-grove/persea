@@ -48,7 +48,7 @@ jobs:
         with:
           components: rustfmt, clippy
           rustflags: ""
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: cargo check
 
   fmt:
@@ -59,7 +59,7 @@ jobs:
         with:
           components: rustfmt, clippy
           rustflags: ""
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: cargo fmt --check
 
   clippy:
@@ -70,7 +70,7 @@ jobs:
         with:
           components: rustfmt, clippy
           rustflags: ""
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       # Deliberate visibility lints (missing_docs, clippy::needless_pass_by_value)
       # stay warnings; the curated set below denies the default clippy::all
       # group so new violations fail the job. result_large_err is allowed:
@@ -85,7 +85,7 @@ jobs:
         with:
           components: rustfmt, clippy
           rustflags: ""
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: cargo test
 
   audit:
@@ -96,7 +96,7 @@ jobs:
         with:
           components: rustfmt, clippy
           rustflags: ""
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       # cargo-audit is a prebuilt-free binary; cache the installed binary so
       # it is compiled once per version instead of on every run. Bump the key
       # when the pinned version changes.
@@ -121,7 +121,7 @@ jobs:
         with:
           components: rustfmt, clippy
           rustflags: ""
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: cargo build
       - name: Start persea and verify /api/health
         env:
@@ -183,7 +183,7 @@ jobs:
         with:
           components: rustfmt, clippy
           rustflags: ""
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: cargo build
       - name: Start persea with ${{ matrix.backend }} and verify the pool is actually reachable
         run: |
@@ -287,7 +287,7 @@ jobs:
         with:
           components: rustfmt, clippy
           rustflags: ""
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Seed LDAP test data
         run: |
           docker cp tests/fixtures/ldap-seed.ldif "${{ job.services.ldap.id }}":/tmp/ldap-seed.ldif
@@ -320,7 +320,7 @@ jobs:
         with:
           components: rustfmt, clippy
           rustflags: ""
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Build persea (release)
         run: cargo build --release
       - name: Generate self-signed cert
