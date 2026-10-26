@@ -523,7 +523,7 @@ body {
    same red vocabulary at a lower weight. Sized to a 32px target. */
 .btn-danger-outline {
     background: transparent;
-    color: var(--danger);
+    color: var(--danger-text);
     border: 1px solid rgba(239,68,68,0.35);
     min-width: 2rem;
     min-height: 2rem;
