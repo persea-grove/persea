@@ -1725,19 +1725,30 @@
                         writer.onack = function(status) {
                             if (status.code && status.code !== 0x0000) {
                                 showTransferStatus('error', file.name);
-                                setTimeout(hideTransferStatus, 3000);
+                                setTimeout(hideTransferStatus, 4000);
+                                return;
                             }
+                            // Only claim success once the server acknowledges the
+                            // stream: the file now exists on the server side.
+                            showTransferStatus('sent', file.name, '(' + formatBytes(file.size) + ')');
+                            setTimeout(hideTransferStatus, 3000);
+                            refreshFileBrowser();
                         };
                         writer.sendData(e.target.result);
                         writer.sendEnd();
-                        showTransferStatus('sent', file.name);
-                        setTimeout(hideTransferStatus, 2000);
                     } catch (err) {
                         showTransferStatus('failed', file.name);
                         setTimeout(hideTransferStatus, 3000);
                     }
                 };
                 reader.readAsArrayBuffer(file);
+            }
+            // A transfer changes the listing, and the panel does not poll:
+            // re-list so an uploaded file appears without closing/reopening.
+            function refreshFileBrowser() {
+                if (!fbOpen) return;
+                if (fbMode === 'rdp') fbListDrive();
+                else if (typeof fbListDir === 'function') fbListDir(fbCurrentPath || '/');
             }
             function formatBytes(bytes) {
                 if (bytes < 1024) return bytes + ' B';
