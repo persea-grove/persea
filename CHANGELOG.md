@@ -50,6 +50,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 
 - State the real connection allowlist defaults.
+- **Destructive actions did nothing in the desktop app.** They were gated on
+  `window.confirm()`, which the desktop shell surfaces as a GTK script dialog
+  that can be dismissed or drawn behind the window — the call never returns,
+  so the X on a session tab, Disconnect, Log Out, delete entry/folder, revoke
+  token, clear credentials, delete jump host and delete auth provider all
+  looked dead. They now use an in-page `uiConfirm()` / `uiAlert()` dialog
+  (`static/js/modal.js`) that behaves the same in every engine, closes on
+  Escape or backdrop click, and labels the action. `templates/pages/client.html`
+  now loads `modal.js`; it is standalone and previously had no access to the
+  helpers.
+- A session could not be terminated when its owning instance no longer
+  existed: a recreated container gets a new instance id, so its rows stayed
+  "owned by another instance" for `session_max_duration + 2h`, and the refusal
+  was sanitized to an opaque `502 infrastructure error`. The registry sweep
+  now also releases rows whose owner stopped updating `last_active_at`, an
+  administrator may terminate such a row directly, and the refusal is a `409`
+  naming the instance.
+- The sessions page reported terminate failures in the new-session form's
+  error slot at the top of the page, so a failed click looked like nothing
+  happened; failures now appear next to the list.
+- Clicking a row in the connections page's **View all** dialog did nothing:
+  the dialog list had no click handler, and its rows carried `data-session-id`
+  even for ended sessions (which would have opened a dead client URL). Rows
+  now reconnect a live session or relaunch an ended one.
+
 
 ## [1.1.1] - 2026-08-29
 

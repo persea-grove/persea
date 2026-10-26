@@ -2736,6 +2736,32 @@ pub fn registry_delete_stale(
     Ok(0)
 }
 
+/// Delete live registry rows owned by a *different* instance whose
+/// `last_active_at` is older than `cutoff`.
+///
+/// `registry_delete_stale` bounds foreign rows by `created_at` and
+/// `session_max_duration + 2h`, which is right for a peer that is still
+/// running but leaves rows un-touchable for hours after a peer disappears
+/// (e.g. a recreated container, whose instance id is its hostname). An
+/// instance that stops updating `last_active_at` is gone, so recency of
+/// that column is the liveness signal. No pool → 0.
+pub fn registry_delete_foreign_stale(
+    _db: &Db,
+    owner_instance: &str,
+    cutoff: &str,
+) -> rusqlite::Result<usize> {
+    if pool_store().is_none() {
+        return Ok(0);
+    }
+    db_route!(
+        db,
+        registry_delete_foreign_stale_pool,
+        owner_instance.to_string(),
+        cutoff.to_string()
+    );
+    Ok(0)
+}
+
 /// Delete every registry row owned by this instance (graceful shutdown).
 /// No pool → 0.
 pub fn registry_delete_all_owned(_db: &Db, owner_instance: &str) -> rusqlite::Result<usize> {
@@ -9210,6 +9236,29 @@ async fn registry_delete_stale_pool(
         ),
     };
     let n = pool_exec(pool, &sql, &args).await.map_err(map_sqlx_err)?;
+    Ok(n as usize)
+}
+
+async fn registry_delete_foreign_stale_pool(
+    pool: &DbPool,
+    owner_instance: String,
+    cutoff: String,
+) -> rusqlite::Result<usize> {
+    let n = pool_exec(
+        pool,
+        qsql!(
+            pool,
+            "DELETE FROM session_registry WHERE owner_instance <> $1 \
+               AND status NOT IN ('pending','completed','error','expired') \
+               AND last_active_at < $2",
+            "DELETE FROM session_registry WHERE owner_instance <> ? \
+               AND status NOT IN ('pending','completed','error','expired') \
+               AND last_active_at < ?"
+        ),
+        &[Arg::Str(owner_instance), Arg::Str(cutoff)],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
     Ok(n as usize)
 }
 

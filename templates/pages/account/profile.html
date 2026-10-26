@@ -932,7 +932,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             loadTokens();
         })
-        .catch(function() { alert('Failed to create token'); })
+        .catch(function() { uiAlert('Failed to create token'); })
         .finally(function() { document.getElementById('btn-submit-token').disabled = false; });
     });
 

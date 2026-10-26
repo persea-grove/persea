@@ -375,9 +375,9 @@ document.getElementById('add-user-form').addEventListener('submit', function(e) 
             closeModal('add-user-modal');
             loadUsers();
         } else {
-            return r.json().then(function(j) { alert(j.error || 'Failed to create user'); });
+            return r.json().then(function(j) { uiAlert(j.error || 'Failed to create user'); });
         }
-    }).catch(function() { alert('Failed to create user'); });
+    }).catch(function() { uiAlert('Failed to create user'); });
 });
 
 document.getElementById('users-edit-role-form').addEventListener('submit', function(e) {
@@ -386,7 +386,7 @@ document.getElementById('users-edit-role-form').addEventListener('submit', funct
     var customRole = document.getElementById('edit-role-custom').value;
     var role = customRole || document.getElementById('edit-role-value').value;
     if (!role) {
-        alert('Select a system role or a custom role');
+        uiAlert('Select a system role or a custom role');
         return;
     }
     fetch('/api/users/' + encodeURIComponent(email) + '/role', {
@@ -399,9 +399,9 @@ document.getElementById('users-edit-role-form').addEventListener('submit', funct
             closeModal('edit-role-modal');
             loadUsers();
         } else {
-            return r.json().then(function(j) { alert(j.error || 'Failed to update role'); });
+            return r.json().then(function(j) { uiAlert(j.error || 'Failed to update role'); });
         }
-    }).catch(function() { alert('Failed to update role'); });
+    }).catch(function() { uiAlert('Failed to update role'); });
 });
 
 document.getElementById('edit-user-form').addEventListener('submit', function(e) {
@@ -428,9 +428,9 @@ document.getElementById('edit-user-form').addEventListener('submit', function(e)
             closeModal('edit-user-modal');
             loadUsers();
         } else {
-            return r.json().then(function(j) { alert(j.error || 'Failed to update user'); });
+            return r.json().then(function(j) { uiAlert(j.error || 'Failed to update user'); });
         }
-    }).catch(function() { alert('Failed to update user'); });
+    }).catch(function() { uiAlert('Failed to update user'); });
 });
 
 document.getElementById('delete-user-form').addEventListener('submit', function(e) {
@@ -445,9 +445,9 @@ document.getElementById('delete-user-form').addEventListener('submit', function(
         if (r.ok || r.status === 204) {
             loadUsers();
         } else {
-            alert('Failed to delete user');
+            uiAlert('Failed to delete user');
         }
-    }).catch(function() { alert('Failed to delete user'); });
+    }).catch(function() { uiAlert('Failed to delete user'); });
 });
 
 function populateCustomRoles() {

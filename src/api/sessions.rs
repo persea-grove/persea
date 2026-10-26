@@ -489,10 +489,43 @@ pub async fn delete_session(
     // with an explicit message instead of a misleading 404.
     if let Some(info) = manager.get_session(id).await {
         if info.remote {
-            return Err(AppError::Session(format!(
-                "session is owned by instance {} — terminate it from that instance",
-                info.owner_instance.as_deref().unwrap_or("unknown")
-            )));
+            let owner = info.owner_instance.clone().unwrap_or_else(|| "unknown".into());
+            // An owner id is the container's hostname, so a recreated
+            // container leaves rows that no live instance will ever clean
+            // up quickly. An admin may terminate those directly; an
+            // operator is told which instance to use.
+            if !id_inner.has_role("admin") {
+                return Err(AppError::Conflict(format!(
+                    "this session is hosted by another instance ({owner}) — it can only be \
+                     terminated there, or by an administrator here"
+                )));
+            }
+            tracing::warn!(
+                session_id = %id,
+                owner_instance = %owner,
+                identity = %id_inner.display_name(),
+                "Admin terminated a session owned by another instance"
+            );
+            if let Some(db_ref) = manager.db() {
+                if let Err(e) = crate::db::registry_delete_session(db_ref, &id.to_string()) {
+                    tracing::warn!(error = %e, "failed to delete orphaned registry row");
+                }
+            }
+            manager.end_session_history(id, "interrupted", 0, false);
+            if let Some(db_ref) = manager.db() {
+                let ip_str = ip.to_string();
+                audit::fire(
+                    db_ref,
+                    Some(identity_key(&id_inner)),
+                    "session.end",
+                    "success",
+                    serde_json::Value::Null,
+                    Some(&ip_str),
+                    Some(&id.to_string()),
+                )
+                .await;
+            }
+            return Ok(StatusCode::NO_CONTENT);
         }
     }
 

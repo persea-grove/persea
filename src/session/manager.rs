@@ -900,6 +900,25 @@ impl SessionManager {
         } else {
             None
         };
+        // A foreign instance that stopped updating `last_active_at` is gone
+        // (recreated container ⇒ new instance id); release its rows after a
+        // few idle cycles so those sessions can be terminated locally.
+        let foreign_cutoff = crate::db::registry_ts(
+            now - chrono::Duration::seconds(
+                (self.config.session_idle_timeout_secs as i64 * 3).max(900),
+            ),
+        );
+        match crate::db::registry_delete_foreign_stale(
+            db,
+            &self.config.instance_id,
+            &foreign_cutoff,
+        ) {
+            Ok(n) if n > 0 => {
+                tracing::info!(deleted = n, "Reaped registry rows owned by a stale instance");
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "Failed to sweep foreign registry rows"),
+        }
         match crate::db::registry_delete_stale(
             db,
             &self.config.instance_id,

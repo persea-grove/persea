@@ -109,3 +109,7 @@ function uiAlert(message, opts) {
     opts.confirmLabel = opts.confirmLabel || 'Close';
     return uiDialog(message, opts);
 }
+
+// Exposed for feature detection from inline handlers and the desktop bridge.
+window.uiConfirm = uiConfirm;
+window.uiAlert = uiAlert;

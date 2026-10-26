@@ -2209,5 +2209,9 @@
         });
     })();
     </script>
+    <!-- In-page confirm/alert dialogs: client.html is standalone, so it does
+         not inherit base.html's modal.js. Loaded after the session script,
+         which only calls uiConfirm() from click handlers. -->
+    <script src="/js/modal.js?v=1.2.0"></script>
 </body>
 </html>

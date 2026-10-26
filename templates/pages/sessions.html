@@ -310,7 +310,7 @@
                     if (r.status === 401) { window.location.href = '/'; return; }
                     if (!r.ok) return r.json().catch(function() { return {}; }).then(function(d) { throw new Error(d.error || 'HTTP ' + r.status); });
                     loadSessions();
-                }).catch(function(e) { showError(e.message || 'Failed to terminate session.'); });
+                }).catch(function(e) { showListError(e.message || 'Failed to terminate session.'); });
             });
         });
     }

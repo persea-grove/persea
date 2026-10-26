@@ -250,11 +250,11 @@
             const url = id ? `/api/admin/jump-hosts/${id}` : '/api/admin/jump-hosts';
             const method = id ? 'PUT' : 'POST';
             const res = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(data) });
-            if (!res.ok) { alert('Error: ' + await res.text()); return; }
+            if (!res.ok) { uiAlert('Error: ' + await res.text()); return; }
             hideModal();
             await loadJumpHosts();
         } catch (e) {
-            alert('Failed to save: ' + e.message);
+            uiAlert('Failed to save: ' + e.message);
         }
     }
 
@@ -302,7 +302,7 @@
         if (!id) return;
         const jh = jumpHosts.find(h => h.id === id);
         if (!jh) return;
-        if (chain.some(c => c.id === id)) { alert('Already in chain'); return; }
+        if (chain.some(c => c.id === id)) { uiAlert('Already in chain'); return; }
         chain.push(jh);
         renderChain();
         sel.value = '';

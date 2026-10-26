@@ -331,7 +331,7 @@ function testProviderConnection(id) {
         })
         .then(function(r) {
             if (!r) { return; }
-            alert(r.ok ? 'Connection successful' : 'Connection failed: ' + (r.detail || 'unknown error'));
+            uiAlert(r.ok ? 'Connection successful' : 'Connection failed: ' + (r.detail || 'unknown error'));
         })
         .catch(function() { uiAlert('Connection test failed (network error)', { danger: true }); });
 }
@@ -464,7 +464,7 @@ function providerConfigForType(type, form) {
                 form.reset();
                 loadProviders();
             }).catch(function(e) {
-                alert('Failed to create provider: ' + e.message);
+                uiAlert('Failed to create provider: ' + e.message);
             });
         });
     }
