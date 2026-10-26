@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Light and dark themes now share one contrast layer: role, protocol and
+  status badges, accent links, notices, primary/destructive buttons and
+  scrollbars use mode-aware tokens. Dark-only badge palettes measured
+  as low as 1.48:1 on white cards, dark muted text 3.32:1 and dark
+  borders 1.25:1; every page now passes WCAG AA in both themes.
 - Session reports and session history now run on both SQLite and
   PostgreSQL instead of failing on PostgreSQL with SQLite-only SQL.
 - The database worker survives a failed query instead of taking every
