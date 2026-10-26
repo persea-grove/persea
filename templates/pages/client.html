@@ -1717,31 +1717,61 @@
             });
             function uploadFile(file) {
                 showTransferStatus('uploading', file.name, '(' + formatBytes(file.size) + ')');
+                var settled = false;
+                function succeed() {
+                    if (settled) return;
+                    settled = true;
+                    showTransferStatus('sent', file.name, '(' + formatBytes(file.size) + ')');
+                    setTimeout(hideTransferStatus, 3000);
+                    refreshFileBrowser();
+                }
+                function fail() {
+                    if (settled) return;
+                    settled = true;
+                    showTransferStatus('failed', file.name);
+                    setTimeout(hideTransferStatus, 4000);
+                }
                 var reader = new FileReader();
                 reader.onload = function(e) {
                     try {
                         var stream = client.createFileStream(file.type || 'application/octet-stream', file.name);
                         var writer = new Guacamole.ArrayBufferWriter(stream);
                         writer.onack = function(status) {
-                            if (status.code && status.code !== 0x0000) {
-                                showTransferStatus('error', file.name);
-                                setTimeout(hideTransferStatus, 4000);
-                                return;
-                            }
-                            // Only claim success once the server acknowledges the
-                            // stream: the file now exists on the server side.
-                            showTransferStatus('sent', file.name, '(' + formatBytes(file.size) + ')');
-                            setTimeout(hideTransferStatus, 3000);
-                            refreshFileBrowser();
+                            if (status.code && status.code !== 0x0000) fail();
+                            else succeed();
                         };
                         writer.sendData(e.target.result);
                         writer.sendEnd();
+                        // guacd does not reliably ack small streams, so confirm
+                        // from the server's own listing as well.
+                        confirmUpload(file.name, succeed, fail);
                     } catch (err) {
-                        showTransferStatus('failed', file.name);
-                        setTimeout(hideTransferStatus, 3000);
+                        fail();
                     }
                 };
                 reader.readAsArrayBuffer(file);
+            }
+            // RDP drives have an authoritative REST listing; poll it briefly
+            // until the filename shows up. SSH SFTP has no such listing, so a
+            // short delay + panel refresh is the confirmation there.
+            function confirmUpload(name, succeed, fail) {
+                if (fbMode !== 'rdp') {
+                    setTimeout(succeed, 900);
+                    return;
+                }
+                var tries = 0;
+                (function poll() {
+                    fetch('/api/sessions/' + sessionId + '/drive-files', { headers: apiHeaders(), credentials: 'same-origin' })
+                        .then(function(r) { return r.ok ? r.json() : []; })
+                        .then(function(entries) {
+                            var found = (entries || []).some(function(en) { return en.name === name; });
+                            if (found) { succeed(); return; }
+                            if (++tries < 8) setTimeout(poll, 400); else fail();
+                        })
+                        .catch(function() {
+                            if (++tries < 8) setTimeout(poll, 400); else fail();
+                        });
+                })();
             }
             // A transfer changes the listing, and the panel does not poll:
             // re-list so an uploaded file appears without closing/reopening.
