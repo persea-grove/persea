@@ -163,6 +163,15 @@ function updatePreview() {
     var logoEl = document.getElementById('preview-logo');
     var logoText = document.getElementById('preview-logo-text');
     logoEl.style.background = color;
+    // Keep the preview legible for any brand colour: white for dark fills,
+    // near-black for light ones (white on #10b981 is only 4.0:1).
+    var _m = /^#?([0-9a-f]{6})$/i.exec(color);
+    if (_m) {
+        var _r = parseInt(_m[1].slice(0, 2), 16), _g = parseInt(_m[1].slice(2, 4), 16), _b = parseInt(_m[1].slice(4, 6), 16);
+        var _lin = function (v) { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+        var _lum = 0.2126 * _lin(_r) + 0.7152 * _lin(_g) + 0.0722 * _lin(_b);
+        logoEl.style.color = _lum > 0.35 ? '#052e16' : '#ffffff';
+    }
 
     var img = logoEl.querySelector('img');
     if (isSafeLogoUrl(logoUrl)) {

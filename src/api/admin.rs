@@ -517,9 +517,11 @@ pub async fn audit_events(
         // tooltip for full value. Raw fallback when unparseable.
         let details_html = build_details_html(&event.details);
 
+        // Mode-aware badges: the old bg-*-900/text-*-300 pair was dark-only
+        // and measured 1.48:1 on the light audit table.
         let outcome_class = match event.outcome.as_str() {
-            "failure" | "error" => "bg-red-900/50 text-red-300 border-red-800",
-            _ => "bg-emerald-900/50 text-emerald-300 border-emerald-800",
+            "failure" | "error" => "badge badge-danger",
+            _ => "badge badge-success",
         };
         // Every interpolated value is escaped: `user_id` is attacker-
         // controlled (session rows store the caller's display name) and
@@ -538,7 +540,7 @@ pub async fn audit_events(
 <td class="px-4 py-3 text-sm text-[var(--text-primary)]">{}</td>
 <td class="px-4 py-3 text-sm text-[var(--text-muted)]" title="user_id: {}">{}</td>
 <td class="px-4 py-3 text-sm text-[var(--text-muted)]">{}</td>
-<td class="px-4 py-3"><span class="inline-block px-2 py-0.5 text-xs rounded border {}">{}</span></td>
+<td class="px-4 py-3"><span class="{}">{}</span></td>
 <td class="px-4 py-3 text-sm text-[var(--text-muted)] max-w-xs">{}</td>
 <td class="px-4 py-3 text-sm text-[var(--text-muted)] font-mono text-right" title="{}">{}</td>
 </tr>"#,
