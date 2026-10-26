@@ -76,6 +76,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now reconnect a live session or relaunch an ended one.
 
 
+### Fixed (follow-up)
+- The confirm dialog was built from Tailwind utilities and `.card`/`.btn`,
+  which only exist on pages that load `base.html`'s stylesheets. `client.html`
+  is standalone (no stylesheet links at all), so on the client page the
+  overlay rendered as an unstyled block at the end of the document — clipped
+  at the left edge, one more per click. It now injects its own stylesheet with
+  explicit classes and fallbacks for every theme variable, replaces any stale
+  overlay before opening, and returns focus on close.
+
 ## [1.1.1] - 2026-08-29
 
 ### Security
