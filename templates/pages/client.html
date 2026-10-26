@@ -16,6 +16,7 @@
             --text-dim: #999; --text-on-primary: #fff;
             --toolbar-bg: rgba(22, 33, 62, 0.95);
             --toolbar-height: 48px;
+            --tabs-height: 34px;
         }
         html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
 
@@ -171,7 +172,7 @@
 
         /* ── Status bar ──────────────────────────────────────── */
         #status {
-            position: fixed; top: calc(var(--toolbar-height) + 34px); left: 0; right: 0;
+            position: fixed; top: calc(var(--toolbar-height) + var(--tabs-height)); left: 0; right: 0;
             padding: 6px 16px;
             background: rgba(0, 0, 0, 0.8); color: var(--text-muted);
             font-family: monospace; font-size: 12px;
@@ -303,7 +304,10 @@
         /* Desktop mode (bridge): the shell has its own tabs + Ctrl+K. */
         .desktop-hidden { display: none !important; }
         body.toolbar-hidden #tab-bar { top: 0; }
-        body.toolbar-hidden #status { top: 34px; }
+        body.toolbar-hidden #status { top: var(--tabs-height); }
+        /* One live session: the toolbar already names it, so the strip is
+           hidden (and its height reclaimed). */
+        body.no-tabs { --tabs-height: 0px; }
         body.desktop-mode #status { top: var(--toolbar-height); }
 
         /* ── Mobile responsive ──────────────────────────────── */
@@ -912,7 +916,9 @@
                 });
                 tabListEl.appendChild(tab);
             });
-            tabBarEl.style.display = tabListEl.childElementCount > 0 ? '' : 'none';
+            var multi = tabListEl.childElementCount > 1 && !desktopMode;
+            tabBarEl.style.display = multi ? '' : 'none';
+            document.body.classList.toggle('no-tabs', !multi);
         }
         function loadTabs() {
             fetchSessions().then(function(list) {
