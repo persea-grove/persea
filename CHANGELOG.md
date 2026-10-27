@@ -132,6 +132,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `min="0.01"`) made the server's own default of 8 fail native constraint
   validation, so the browser blocked the form and no request was ever sent.
   The step ladder starts at 0.25 and the hint states the unit and range.
+- Recordings gained a protocol filter and a search box (name, target, user) over
+  the loaded page, with a match count; the docs sidebar gained a filter box that
+  narrows documents and headings; the audit timestamp column is labelled (UTC).
+- The client's screenshot button now reports its outcome ("Screenshot saved.",
+  "Nothing to capture yet", "session is not connected") instead of returning
+  silently on failure.
 
 ## [1.1.1] - 2026-08-29
 
