@@ -254,7 +254,13 @@ function renderAuditPagination() {
     htmx.process(pagesEl);
 }
 
-document.getElementById('audit-table-body').addEventListener('auditEventsLoaded', renderAuditPagination);
+// htmx dispatches HX-Trigger-After-Swap on document.body, not on the
+// swapped table body — listening there never fired, so the count and the
+// active page button stayed on page 1 forever.
+document.addEventListener('auditEventsLoaded', renderAuditPagination);
+document.body.addEventListener('htmx:afterSwap', function(evt) {
+    if (evt.target && evt.target.id === 'audit-table-body') renderAuditPagination();
+});
 
 document.getElementById('verify-chain-btn').addEventListener('click', verifyChain);
 document.getElementById('export-menu-btn').addEventListener('click', function() {

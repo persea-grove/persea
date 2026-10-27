@@ -289,6 +289,15 @@ document.addEventListener('click', function(evt) {
         }
     });
 });
+// A native <details> ignores Escape; close it and put focus back on the summary.
+document.addEventListener('keydown', function(evt) {
+    if (evt.key !== 'Escape') return;
+    document.querySelectorAll('details.row-menu[open]').forEach(function(menu) {
+        menu.removeAttribute('open');
+        var summary = menu.querySelector('summary');
+        if (summary) summary.focus();
+    });
+});
 
 function getFilteredUsers() {
     var query = (document.getElementById('user-search').value || '').toLowerCase();
