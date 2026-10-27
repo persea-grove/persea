@@ -128,6 +128,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so with nothing live they appeared dead.
 - The docs pager shows "1/19" below 640px instead of a four-line wrapped label,
   and Escape closes a users-table row menu.
+- **Save Settings now works.** The Max Duration field (hours, `step="0.25"`,
+  `min="0.01"`) made the server's own default of 8 fail native constraint
+  validation, so the browser blocked the form and no request was ever sent.
+  The step ladder starts at 0.25 and the hint states the unit and range.
 
 ## [1.1.1] - 2026-08-29
 
