@@ -119,6 +119,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (Auto / Dark / Light) with the tooltip and accessible name kept in sync.
 - Disabling a user from the row menu now asks for confirmation — it was one
   click away from Edit with no prompt.
+- The audit log's pagination count and active page button now update when you
+  page or filter (the listener was bound to an element that never received
+  htmx's after-swap event).
+- The sessions protocol/status filters now apply to the history table as well
+  as the live list, with a "Recent sessions (N of M)" count and an explicit
+  empty row when nothing matches; previously they only filtered the live list,
+  so with nothing live they appeared dead.
+- The docs pager shows "1/19" below 640px instead of a four-line wrapped label,
+  and Escape closes a users-table row menu.
 
 ## [1.1.1] - 2026-08-29
 
