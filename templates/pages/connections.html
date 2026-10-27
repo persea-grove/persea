@@ -728,6 +728,8 @@
     .recent-chip:hover { background:var(--bg-hover);border-color:var(--border-focus) }
     .recent-chip:disabled { opacity:0.6;cursor:default }
     .recent-chip-name { font-size:12px;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px }
+    .recent-chip-age { font-size:11px;color:var(--text-muted);flex-shrink:0;font-variant-numeric:tabular-nums }
+    .recent-chip-count { font-size:10px;font-weight:600;color:var(--text-secondary);background:var(--bg-hover);border-radius:5px;padding:1px 5px;flex-shrink:0 }
     .recent-chip-more { font-size:12px;color:var(--text-muted);border-style:dashed }
     .recent-chip-more:hover { color:var(--text-primary) }
     .recent-modal-list { display:flex;flex-direction:column;gap:8px;overflow-y:auto;padding-right:4px;min-height:0 }
@@ -4017,14 +4019,34 @@
 
     // One compact chip for the strip: proto badge, name, status. The whole
     // chip is the action (rejoin or relaunch); non-actionable rows are inert.
-    function recentChipHtml(s) {
+    // "2h" style ages: the strip repeated one entry five times with no sense
+    // of when any of it happened.
+    function relativeAge(value) {
+        if (!value) return '';
+        var text = String(value);
+        var then = new Date(text.indexOf('T') === -1 ? text.replace(' ', 'T') + 'Z' : text);
+        if (isNaN(then.getTime())) return '';
+        var mins = Math.round((Date.now() - then.getTime()) / 60000);
+        if (mins < 1) return 'now';
+        if (mins < 60) return mins + 'm';
+        var hours = Math.round(mins / 60);
+        if (hours < 24) return hours + 'h';
+        var days = Math.round(hours / 24);
+        if (days < 30) return days + 'd';
+        return Math.round(days / 30) + 'mo';
+    }
+
+    function recentChipHtml(s, repeat) {
         var proto = (s.session_type || '').toLowerCase();
         var sc = RECENT_STATUS_CLASS[s.status] || 'status-completed';
         var name = s.entry_display_name || s.hostname || s.session_id;
         var target = s.url || s.hostname || '\u2014';
         var attrs = recentActionAttrs(s);
+        var age = relativeAge(s.started_at || s.ended_at);
         var inner = '<span class="' + protoClass(proto) + '" style="padding:1px 6px;font-size:10px;font-weight:500;border-radius:5px;border:1px solid;flex-shrink:0">' + escapeHtml((proto || '?').toUpperCase()) + '</span>'
             + '<span class="recent-chip-name">' + escapeHtml(name) + '</span>'
+            + (repeat > 1 ? '<span class="recent-chip-count" title="' + repeat + ' consecutive connections">\u00D7' + repeat + '</span>' : '')
+            + (age ? '<span class="recent-chip-age">' + escapeHtml(age) + '</span>' : '')
             + '<span class="status-pill ' + sc + '" style="padding:1px 6px;font-size:10px">' + escapeHtml((s.status || 'unknown').toUpperCase()) + '</span>';
         if (!attrs) {
             return '<span class="recent-chip" title="' + escapeAttr(name + ' \u00B7 ' + target) + '">' + inner + '</span>';
@@ -4087,9 +4109,18 @@
         // Strip: one row, never taller. Overflow scrolls horizontally and the
         // rest of the history stays behind "View all".
         var strip = document.getElementById('recent-strip');
-        var shown = sessions.slice(0, RECENT_STRIP_MAX);
-        var html = shown.map(recentChipHtml).join('');
-        var extra = sessions.length - shown.length;
+        // Collapse runs of the same entry: five identical chips said nothing,
+        // and the newest of the run is the one you can act on.
+        var collapsed = [];
+        sessions.forEach(function(s) {
+            var key = s.entry_display_name || s.hostname || s.session_id;
+            var last = collapsed[collapsed.length - 1];
+            if (last && last.key === key) { last.count++; return; }
+            collapsed.push({ key: key, session: s, count: 1 });
+        });
+        var shown = collapsed.slice(0, RECENT_STRIP_MAX);
+        var html = shown.map(function(c) { return recentChipHtml(c.session, c.count); }).join('');
+        var extra = collapsed.length - shown.length;
         if (extra > 0) {
             html += '<button type="button" class="recent-chip recent-chip-more" id="recent-more-chip">+' + extra + ' more</button>';
         }

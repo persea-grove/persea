@@ -259,15 +259,31 @@ function renderUserRow(user) {
         '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + safeAuth + '</td>' +
         '<td class="px-4 py-3 text-sm ' + statusClass + '">' + statusText + '</td>' +
         '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + safeLogin + '</td>' +
-        '<td class="px-4 py-3 text-right text-sm">' +
-            '<button data-action="edit-user" data-email="' + safeEmail + '" class="text-[var(--text-muted)] hover:text-[var(--text-secondary)] mr-3">Edit</button>' +
-            '<button data-action="edit-role" data-email="' + safeEmail + '" data-role="' + escapeHtml(user.role || '') + '" data-custom-role="' + escapeHtml((user.custom_role && user.custom_role.name) || '') + '" class="text-[var(--text-muted)] hover:text-[var(--text-secondary)] mr-3">Edit Role</button>' +
-            // Disable/Enable is neutral and reversible; it sits separated
-            // from Delete so the two are not one mis-click apart.
-            '<button data-action="toggle-status" data-email="' + safeEmail + '" data-status="' + statusLower + '" class="btn btn-secondary mr-2">' + toggleLabel + '</button>' +
-            '<button data-action="delete-user" data-email="' + safeEmail + '" class="btn btn-danger-outline">Delete</button>' +
+        '<td class="px-4 py-2 text-right text-sm whitespace-nowrap">' +
+            '<button type="button" data-action="edit-user" data-email="' + safeEmail + '" class="btn btn-secondary btn-sm">Edit</button>' +
+            // Four side-by-side actions made the column unreadable and put
+            // Delete one mis-click from Disable; secondary actions live in a
+            // menu, with Delete last and coloured.
+            '<details class="row-menu">' +
+                '<summary class="row-menu-toggle" title="More actions" aria-label="More actions for ' + escapeHtml(user.email || '') + '">\u22EE</summary>' +
+                '<div class="row-menu-list">' +
+                    '<button type="button" data-action="edit-role" data-email="' + safeEmail + '" data-role="' + escapeHtml(user.role || '') + '" data-custom-role="' + escapeHtml((user.custom_role && user.custom_role.name) || '') + '">Change role</button>' +
+                    '<button type="button" data-action="toggle-status" data-email="' + safeEmail + '" data-status="' + statusLower + '">' + toggleLabel + ' user</button>' +
+                    '<button type="button" data-action="delete-user" data-email="' + safeEmail + '" class="row-menu-danger">Delete user</button>' +
+                '</div>' +
+            '</details>' +
         '</td></tr>';
 }
+
+// Row action menu: <details> keeps it keyboard/AT-friendly without a menu
+// widget; clicking anywhere else (or picking an action) closes it.
+document.addEventListener('click', function(evt) {
+    document.querySelectorAll('details.row-menu[open]').forEach(function(menu) {
+        if (!menu.contains(evt.target) || evt.target.closest('.row-menu-list button')) {
+            menu.removeAttribute('open');
+        }
+    });
+});
 
 function getFilteredUsers() {
     var query = (document.getElementById('user-search').value || '').toLowerCase();

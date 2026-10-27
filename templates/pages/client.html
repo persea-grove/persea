@@ -903,8 +903,21 @@
                     ev.stopPropagation();
                     if (!(await uiConfirm('Terminate this session?', { danger: true, confirmLabel: 'Terminate' }))) return;
                     terminateSession(s.session_id).then(function() {
-                        if (s.session_id === sessionId) closeOrNavigate();
-                        else loadTabs();
+                        if (s.session_id !== sessionId) { loadTabs(); return; }
+                        // Closing the tab you are on should move to another
+                        // session, not dump you out of the session view.
+                        fetchSessions().then(function(list) {
+                            var next = (list || []).find(function(x) {
+                                return x.session_id !== sessionId
+                                    && (x.status === 'active' || x.status === 'pending'
+                                        || x.status === 'disconnected');
+                            });
+                            if (next) {
+                                window.location.href = '/client/' + encodeURIComponent(next.session_id);
+                            } else {
+                                closeOrNavigate();
+                            }
+                        }).catch(function() { closeOrNavigate(); });
                     }).catch(function() {});
                 });
                 tab.appendChild(close);

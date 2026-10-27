@@ -151,6 +151,57 @@ function exportAudit(format) {
 // swap (initial load, filter change, or a page-button click below).
 var AUDIT_FILTER_INCLUDE = "[name='from'],[name='to'],[name='user'],[name='event_type'],[name='outcome']";
 
+// The hash column shows 8 characters with the full value in @title. Clicking
+// it copies the whole hash — auditors kept asking for the rest of it.
+function markAuditHashCells() {
+    var cells = document.querySelectorAll('#audit-table-body td[title]');
+    Array.prototype.forEach.call(cells, function(cell) {
+        var value = cell.getAttribute('title') || '';
+        if (value.length < 32) return;      // not a hash cell
+        cell.style.cursor = 'pointer';
+        cell.title = value + ' (click to copy)';
+    });
+}
+document.addEventListener('click', function(evt) {
+    var cell = evt.target.closest('#audit-table-body td[title]');
+    if (!cell) return;
+    var value = (cell.getAttribute('title') || '').replace(' (click to copy)', '');
+    if (value.length < 32) return;
+
+    var flash = function(text) {
+        var original = cell.textContent;
+        cell.textContent = text;
+        setTimeout(function() { cell.textContent = original; }, 900);
+    };
+    var fallback = function() {
+        var ta = document.createElement('textarea');
+        ta.value = value;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        var ok = false;
+        try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+        document.body.removeChild(ta);
+        return ok;
+    };
+    var settle = function(ok) { flash(ok ? 'copied' : 'copy failed'); };
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(value).then(function() { settle(true); },
+            function() { settle(fallback()); });
+    } else {
+        settle(fallback());
+    }
+});
+
+document.body.addEventListener('htmx:afterSwap', function(evt) {
+    if (evt.target && evt.target.id === 'audit-table-body') markAuditHashCells();
+});
+if (document.readyState !== 'loading') markAuditHashCells();
+else document.addEventListener('DOMContentLoaded', markAuditHashCells);
+
 function renderAuditPagination() {
     var dataRow = document.getElementById('audit-pagination-data');
     var countEl = document.getElementById('audit-count');

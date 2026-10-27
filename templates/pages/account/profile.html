@@ -17,7 +17,7 @@
             <p class="page-rail-label">Account</p>
             <nav class="page-rail" role="tablist" aria-label="Profile sections">
                 <button type="button" role="tab" id="rail-profile" aria-controls="panel-profile" aria-selected="true" tabindex="0" class="page-rail-tab">Profile</button>
-                <button type="button" role="tab" id="rail-security" aria-controls="panel-security" aria-selected="false" tabindex="-1" class="page-rail-tab">Security</button>
+                <button type="button" role="tab" id="rail-security" aria-controls="panel-security" aria-selected="false" tabindex="-1" class="page-rail-tab">Two-factor</button>
                 <button type="button" role="tab" id="rail-tokens" aria-controls="panel-tokens" aria-selected="false" tabindex="-1" class="page-rail-tab">API Keys</button>
             </nav>
         </div>
@@ -27,13 +27,25 @@
                  section at a time, hash preserves the active tab -->
             <div class="page-tabs" role="tablist" aria-label="Profile sections">
                 <button type="button" role="tab" id="tab-profile" aria-controls="panel-profile" aria-selected="true" tabindex="0" class="page-tab">Profile</button>
-                <button type="button" role="tab" id="tab-security" aria-controls="panel-security" aria-selected="false" tabindex="-1" class="page-tab">Security</button>
+                <button type="button" role="tab" id="tab-security" aria-controls="panel-security" aria-selected="false" tabindex="-1" class="page-tab">Two-factor</button>
                 <button type="button" role="tab" id="tab-tokens" aria-controls="panel-tokens" aria-selected="false" tabindex="-1" class="page-tab">API Keys</button>
             </div>
 
             <!-- Profile: identity, appearance, session preference, preset
                  credentials -->
-            <section role="tabpanel" id="panel-profile" aria-labelledby="tab-profile" tabindex="-1" class="space-y-4">
+            <style>
+    /* Forms stretched the full content width (~1200px), and the grey input
+       fill read as "disabled". Cap the measure; give fields a card surface. */
+    @media (min-width: 1024px) {
+        #panel-profile, #panel-security, #panel-tokens { max-width: 760px; }
+    }
+    #panel-profile .form-input, #panel-security .form-input, #panel-tokens .form-input {
+        background: var(--bg-card);
+    }
+    #panel-profile .form-input:hover, #panel-security .form-input:hover,
+    #panel-tokens .form-input:hover { border-color: var(--border-focus); }
+</style>
+<section role="tabpanel" id="panel-profile" aria-labelledby="tab-profile" tabindex="-1" class="space-y-4">
                 <!-- Profile Card -->
                 <div class="card">
                     <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4">Account Information</h2>

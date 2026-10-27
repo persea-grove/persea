@@ -1655,3 +1655,20 @@ body, .recent-strip, .recent-modal-list, .conn-sidebar, .toc-panel, .table-wrap 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 6px; border: 2px solid transparent; background-clip: content-box; }
+
+/* ── Row action menu (tables) ─────────────────────────────── */
+.row-menu { display: inline-block; position: relative; margin-left: 6px; vertical-align: middle; }
+.row-menu > summary { list-style: none; cursor: pointer; padding: 5px 9px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--bg-input); color: var(--text-secondary);
+    font-size: 13px; line-height: 1; }
+.row-menu > summary::-webkit-details-marker { display: none; }
+.row-menu > summary:hover { background: var(--bg-hover); color: var(--text-primary); }
+.row-menu-list { position: absolute; right: 0; top: calc(100% + 4px); z-index: 40;
+    min-width: 168px; padding: 6px; border-radius: 10px; background: var(--bg-card);
+    border: 1px solid var(--border); box-shadow: 0 12px 32px rgba(0,0,0,.35); }
+.row-menu-list button { display: block; width: 100%; text-align: left; padding: 7px 10px;
+    border: none; background: none; border-radius: 6px; cursor: pointer;
+    font-size: 13px; color: var(--text-secondary); }
+.row-menu-list button:hover { background: var(--bg-hover); color: var(--text-primary); }
+.row-menu-list .row-menu-danger { color: var(--danger-text); }
+.row-menu-list .row-menu-danger:hover { background: var(--danger-bg); color: var(--danger-text); }

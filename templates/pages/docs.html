@@ -36,8 +36,13 @@
 
     <!-- Main Content -->
     <div class="flex-1 min-w-0 max-w-none">
+        <nav id="docs-pager" class="docs-pager" aria-label="Documentation pages">
+            <button type="button" id="doc-prev" class="btn btn-secondary btn-sm">&larr; Previous</button>
+            <span id="doc-pos" class="docs-pager-pos" aria-live="polite"></span>
+            <button type="button" id="doc-next" class="btn btn-secondary btn-sm">Next &rarr;</button>
+        </nav>
         {% for doc in docs %}
-        <section id="{{ doc.slug }}" class="docs-content mb-12">
+        <section id="{{ doc.slug }}" class="docs-content mb-12"{% if not loop.first %} hidden{% endif %}>
             {{ doc.html | safe }}
         </section>
         {% endfor %}
@@ -55,6 +60,12 @@
         font-weight: 600;
         line-height: 1.3;
     }
+    .docs-content { max-width: 76ch; }
+    .docs-content[hidden] { display: none; }
+    .docs-pager { display: flex; align-items: center; justify-content: space-between;
+        gap: 12px; margin: 0 0 1.25rem; }
+    .docs-pager-pos { font-size: 12px; color: var(--text-muted); text-align: center; flex: 1; }
+    .docs-pager .btn[disabled] { opacity: .45; cursor: default; }
     .docs-content h1 { font-size: 1.5rem; margin: 0 0 1rem; }
     .docs-content h2 { font-size: 1.125rem; margin: 1.5rem 0 0.75rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--border); }
     .docs-content h3 { font-size: 1rem; margin: 1.25rem 0 0.5rem; }
@@ -166,7 +177,7 @@
             var activeId = targets.length ? targets[0].id : null;
             for (var i = targets.length - 1; i >= 0; i--) {
                 var el = document.getElementById(targets[i].id);
-                if (el && el.offsetTop <= scrollY) {
+                if (el && el.offsetParent !== null && el.offsetTop <= scrollY) {
                     activeId = targets[i].id;
                     break;
                 }
@@ -190,6 +201,80 @@
         document.getElementById('toc').addEventListener('click', function(evt) {
             if (evt.target.closest('a')) { setDrawer(false); }
         });
+
+        // ── One document at a time ──────────────────────────────────────
+        // Every doc used to render inline: 199 screens on desktop and 468 on a
+        // phone. Show the selected document only, with prev/next and deep
+        // links (#heading opens the document that contains it).
+        (function() {
+            var sections = Array.prototype.slice.call(document.querySelectorAll('.docs-content'));
+            var pager = document.getElementById('docs-pager');
+            if (sections.length < 2) { if (pager) pager.remove(); return; }
+            var docLinks = Array.prototype.slice.call(document.querySelectorAll('#toc .toc-doc-link'));
+            var bySlug = {};
+            docLinks.forEach(function(a) { bySlug[a.getAttribute('href').slice(1)] = a; });
+            var idx = 0;
+
+            function show(i, updateHash) {
+                idx = Math.max(0, Math.min(sections.length - 1, i));
+                sections.forEach(function(s, k) { s.hidden = k !== idx; });
+                var slug = sections[idx].id;
+                var link = bySlug[slug];
+                docLinks.forEach(function(a) { a.classList.toggle('active', a === link); });
+                if (link) {
+                    var group = link.closest('.toc-group');
+                    if (group) group.open = true;
+                }
+                var pos = document.getElementById('doc-pos');
+                if (pos) {
+                    pos.textContent = (idx + 1) + ' of ' + sections.length
+                        + (link ? ' \u00B7 ' + link.textContent.trim() : '');
+                }
+                var prev = document.getElementById('doc-prev');
+                var next = document.getElementById('doc-next');
+                if (prev) prev.disabled = idx === 0;
+                if (next) next.disabled = idx === sections.length - 1;
+                if (updateHash) {
+                    try { history.replaceState(null, '', '#' + slug); } catch (e) {}
+                }
+                window.scrollTo(0, 0);
+            }
+
+            function fromHash() {
+                var hash = '';
+                try { hash = decodeURIComponent((location.hash || '').slice(1)); } catch (e) {}
+                if (!hash) return 0;
+                var el = document.getElementById(hash);
+                if (!el) return 0;
+                var section = el.closest('.docs-content');
+                var i = sections.indexOf(section);
+                return i < 0 ? 0 : i;
+            }
+
+            var prevBtn = document.getElementById('doc-prev');
+            var nextBtn = document.getElementById('doc-next');
+            if (prevBtn) prevBtn.addEventListener('click', function() { show(idx - 1, true); });
+            if (nextBtn) nextBtn.addEventListener('click', function() { show(idx + 1, true); });
+
+            document.getElementById('toc').addEventListener('click', function(evt) {
+                var a = evt.target.closest('a');
+                if (!a) return;
+                var id = a.getAttribute('href').slice(1);
+                var target = document.getElementById(id);
+                if (!target) return;
+                var section = target.closest('.docs-content');
+                var i = sections.indexOf(section);
+                if (i >= 0 && i !== idx) {
+                    evt.preventDefault();
+                    show(i, true);
+                    var landed = document.getElementById(id);
+                    if (landed) landed.scrollIntoView();
+                }
+            });
+
+            show(fromHash(), false);
+            window.addEventListener('hashchange', function() { show(fromHash(), false); });
+        })();
     })();
 </script>
 {% endblock %}
