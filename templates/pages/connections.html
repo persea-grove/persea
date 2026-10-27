@@ -776,15 +776,33 @@
     }
     .detail-section-body { padding-bottom:4px; }
     .folder-actions { display:none; gap:2px; margin-left:8px; flex-shrink:0; }
-    .folder-item:hover .folder-actions.is-admin { display:flex; }
-    .folder-actions svg { width:14px; height:14px; cursor:pointer; color:var(--text-muted); border-radius:4px; padding:2px; box-sizing:content-box; }
-    .folder-actions svg:hover { color:var(--text-primary); background:var(--bg-input); }
+    /* Show on hover *and* when keyboard focus is inside the row, so the
+       edit/delete buttons are reachable without a mouse. */
+    /* Always visible: hover-only + display:none removes them from the tab
+       order, so they could never be focused. */
+    .folder-actions.is-admin { display:flex; }
+    .folder-actions button {
+        display:inline-flex; align-items:center; justify-content:center;
+        width:22px; height:22px; padding:0; border:none; border-radius:4px;
+        background:transparent; color:var(--text-muted); cursor:pointer;
+    }
+    .folder-actions button:hover { color:var(--text-primary); background:var(--bg-input); }
+    .folder-actions button:focus-visible { outline:2px solid var(--border-focus); outline-offset:1px; }
+    .folder-actions button svg { width:14px; height:14px; display:block; }
     .personal-scope-only { display: none; }
     .personal-scope-only.personal-visible { display: inline-flex; }
-    .pf-actions { display:none; gap:2px; margin-left:8px; flex-shrink:0; }
-    .folder-item:hover .pf-actions { display:flex; }
-    .pf-actions svg { width:14px; height:14px; cursor:pointer; color:var(--text-muted); border-radius:4px; padding:2px; box-sizing:content-box; }
-    .pf-actions svg:hover { color:var(--text-primary); background:var(--bg-input); }
+    .pf-actions { display:flex; gap:2px; margin-left:8px; flex-shrink:0; }
+    .pf-actions button,
+    .folder-actions button { display:inline-flex; align-items:center; justify-content:center;
+        width:22px; height:22px; padding:0; border:none; border-radius:4px;
+        background:transparent; color:var(--text-muted); cursor:pointer; }
+    .pf-actions button:hover,
+    .folder-actions button:hover { color:var(--text-primary); background:var(--bg-input); }
+    .pf-actions button:focus-visible,
+    .folder-actions button:focus-visible { outline:2px solid var(--border-focus); outline-offset:1px; }
+    .pf-actions button svg, .folder-actions button svg { width:14px; height:14px; display:block; }
+    .folder-item:focus-visible, .entry-row:focus-visible {
+        outline:2px solid var(--border-focus); outline-offset:-2px; }
     .pf-tree-hint { padding:8px 10px 6px; font-size:11px; color:var(--text-muted); line-height:1.5; border-bottom:1px solid var(--border); margin-bottom:6px; }
     .pf-section-header {
         display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;
@@ -1480,15 +1498,15 @@
                 : '<span style="width:16px;flex-shrink:0"></span>';
             var actions = isPf
                 ? '<span class="pf-actions" data-pf-id="' + escapeAttr(String(f.id)) + '" data-path="' + escapeAttr(f.path) + '">'
-                    + '<svg class="pf-add-btn" viewBox="0 0 20 20" fill="currentColor" title="New sub-folder"><path d="M10 4a1 1 0 011 1v4h4a1 1 0 110 2h-4v4a1 1 0 11-2 0v-4H5a1 1 0 110-2h4V5a1 1 0 011-1z"/></svg>'
-                    + '<svg class="pf-edit-btn" viewBox="0 0 20 20" fill="currentColor" title="Rename folder"><path d="M2.695 14.763l-1.262 3.154a.5.5 0 00.65.65l3.155-1.262a4 4 0 001.343-.885L17.5 5.5a2.121 2.121 0 00-3-3L3.58 13.42a4 4 0 00-.885 1.343z"/></svg>'
-                    + '<svg class="pf-delete-btn" viewBox="0 0 20 20" fill="currentColor" title="Delete folder"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>'
+                    + '<button type="button" class="pf-add-btn" title="New sub-folder" aria-label="New sub-folder"><svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M10 4a1 1 0 011 1v4h4a1 1 0 110 2h-4v4a1 1 0 11-2 0v-4H5a1 1 0 110-2h4V5a1 1 0 011-1z"/></svg></button>'
+                    + '<button type="button" class="pf-edit-btn" title="Rename folder" aria-label="Rename folder"><svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M2.695 14.763l-1.262 3.154a.5.5 0 00.65.65l3.155-1.262a4 4 0 001.343-.885L17.5 5.5a2.121 2.121 0 00-3-3L3.58 13.42a4 4 0 00-.885 1.343z"/></svg></button>'
+                    + '<button type="button" class="pf-delete-btn" title="Delete folder" aria-label="Delete folder"><svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg></button>'
                     + '</span>'
                 : '<span class="folder-actions admin-only is-admin" data-scope="' + escapeAttr(f.scope) + '" data-path="' + escapeAttr(f.path) + '">'
-                    + '<svg class="folder-edit-btn" viewBox="0 0 20 20" fill="currentColor" title="Edit folder"><path d="M2.695 14.763l-1.262 3.154a.5.5 0 00.65.65l3.155-1.262a4 4 0 001.343-.885L17.5 5.5a2.121 2.121 0 00-3-3L3.58 13.42a4 4 0 00-.885 1.343z"/></svg>'
-                    + '<svg class="folder-delete-btn" viewBox="0 0 20 20" fill="currentColor" title="Delete folder"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>'
+                    + '<button type="button" class="folder-edit-btn" title="Edit folder" aria-label="Edit folder"><svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M2.695 14.763l-1.262 3.154a.5.5 0 00.65.65l3.155-1.262a4 4 0 001.343-.885L17.5 5.5a2.121 2.121 0 00-3-3L3.58 13.42a4 4 0 00-.885 1.343z"/></svg></button>'
+                    + '<button type="button" class="folder-delete-btn" title="Delete folder" aria-label="Delete folder"><svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg></button>'
                     + '</span>';
-            out += '<div class="folder-item' + active + '" data-scope="' + escapeAttr(f.scope) + '" data-path="' + escapeAttr(f.path) + '"' + (isPf ? ' data-pf-id="' + escapeAttr(String(f.id)) + '" draggable="true"' : '') + ' style="padding-left:' + (12 + depth * 14) + 'px" title="' + escapeAttr(f.path + (isPf ? ' (personal)' : ' (' + f.scope + ')')) + '">'
+            out += '<div class="folder-item' + active + '" role="treeitem" tabindex="0" aria-selected="' + (active ? 'true' : 'false') + '" data-scope="' + escapeAttr(f.scope) + '" data-path="' + escapeAttr(f.path) + '"' + (isPf ? ' data-pf-id="' + escapeAttr(String(f.id)) + '" draggable="true"' : '') + ' style="padding-left:' + (12 + depth * 14) + 'px" title="' + escapeAttr(f.path + (isPf ? ' (personal)' : ' (' + f.scope + ')')) + '">'
                 + chevron
                 + '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(folderLabel(f.path)) + '</span>'
                 + '<span style="font-size:11px;color:var(--text-muted);margin-left:8px">' + count + '</span>'
@@ -1671,7 +1689,7 @@
         var proto = (e.session_type || '').toLowerCase();
         var key = entryKey(scope, path, e.name);
         var selected = key === selectedEntryKey ? ' selected' : '';
-        return '<div class="entry-row' + selected + '" data-scope="' + escapeAttr(scope) + '" data-path="' + escapeAttr(path) + '" data-name="' + escapeAttr(e.name) + '" style="display:flex;align-items:center;gap:12px">'
+        return '<div class="entry-row' + selected + '" role="button" tabindex="0" data-scope="' + escapeAttr(scope) + '" data-path="' + escapeAttr(path) + '" data-name="' + escapeAttr(e.name) + '" style="display:flex;align-items:center;gap:12px">'
             + '<span class="' + protoClass(proto) + '" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid">' + escapeHtml((proto || '?').toUpperCase()) + '</span>'
             + '<div style="flex:1;min-width:0">'
             + '<div style="font-size:13px;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(e.display_name || e.name) + '</div>'
@@ -3847,6 +3865,17 @@
             document.getElementById('btn-filters').setAttribute('aria-expanded', 'false');
         }
     });
+    // Folders and entries are focusable rows (role=treeitem / role=button but
+    // divs, so the browser does not synthesise a click for them).
+    document.addEventListener('keydown', function(ev) {
+        if (ev.key !== 'Enter' && ev.key !== ' ') return;
+        var row = ev.target.closest && ev.target.closest('.folder-item, .entry-row');
+        if (!row) return;
+        if (ev.target.closest('.folder-actions button, .pf-actions button, .folder-chevron')) return;
+        ev.preventDefault();
+        row.click();
+    });
+
     document.getElementById('detail-rotate-cred').addEventListener('click', rotateCredential);
     document.getElementById('detail-add-to-folder').addEventListener('click', openAddToFolder);
 
