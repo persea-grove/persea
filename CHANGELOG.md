@@ -84,6 +84,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at the left edge, one more per click. It now injects its own stylesheet with
   explicit classes and fallbacks for every theme variable, replaces any stale
   overlay before opening, and returns focus on close.
+- **The session view now matches the rest of the app.** `client.html` was the
+  only page carrying its own palette (navy surfaces, pink primary, teal accent,
+  `#333` borders) and it ignored the light theme. It now loads `app.css` and
+  aliases its local variables onto the shared tokens, so toolbar, tabs,
+  badges, file browser and dialogs follow the theme; destructive actions use
+  `--danger`; typography uses `--font-sans`/`--font-mono`.
+- Theme choice on the session view is applied by `static/js/theme-boot.js` —
+  an inline bootstrap never ran under the app's `script-src 'self' 'nonce-…'`
+  CSP.
+- The sessions empty state pointed at a form that no longer exists; it now
+  names **+ New Session**. The tunnels Chain Builder is disabled (with a hint)
+  while no jump hosts exist instead of offering an Add Hop that does nothing.
 
 ## [1.1.1] - 2026-08-29
 
