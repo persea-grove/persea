@@ -114,6 +114,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Two-factor**.
 - Recent chips show their age and collapse consecutive repeats into one chip
   with a ×N badge.
+- The header theme toggle showed only an icon (the monitor glyph for **Auto**),
+  which read as an unlabeled button; it now shows the mode as text
+  (Auto / Dark / Light) with the tooltip and accessible name kept in sync.
+- Disabling a user from the row menu now asks for confirmation — it was one
+  click away from Edit with no prompt.
 
 ## [1.1.1] - 2026-08-29
 
