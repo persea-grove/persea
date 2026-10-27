@@ -96,6 +96,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The sessions empty state pointed at a form that no longer exists; it now
   names **+ New Session**. The tunnels Chain Builder is disabled (with a hint)
   while no jump hosts exist instead of offering an Add Hop that does nothing.
+- Documentation is paginated: one document at a time with Previous/Next and a
+  position indicator, deep links per document (`#slug`, heading anchors still
+  resolve) and a 76ch measure. The page was 179,574 px of scroll and is now
+  ~3.4k px.
+- Closing the current session tab opens the next live session instead of
+  dropping out to the connections page.
+- Recordings rows are one line each (truncated names/users with tooltips,
+  non-wrapping dates), Play is primary and Delete an outline — 85px → 49px per
+  row.
+- Users: **Edit** plus a row menu (Change role / Disable / Delete) replaces four
+  side-by-side actions.
+- Audit log: clicking a truncated event hash copies the full value, with
+  "copied"/"copy failed" feedback.
+- Profile forms are capped at 760px and inputs use a card surface rather than
+  the grey fill that read as disabled; the account **Security** tab is renamed
+  **Two-factor**.
+- Recent chips show their age and collapse consecutive repeats into one chip
+  with a ×N badge.
 
 ## [1.1.1] - 2026-08-29
 
