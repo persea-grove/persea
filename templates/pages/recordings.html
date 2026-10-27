@@ -29,6 +29,20 @@
     </div>
 
     <div id="recordings-content" class="hidden">
+        <div class="flex flex-wrap items-center gap-3 mb-3">
+            <input id="rec-search" type="search" class="form-input" style="max-width:280px"
+                   placeholder="Search name, target or user" aria-label="Search recordings">
+            <select id="rec-proto" class="form-input" style="max-width:170px" aria-label="Filter recordings by protocol">
+                <option value="">All protocols</option>
+                <option value="ssh">SSH</option>
+                <option value="rdp">RDP</option>
+                <option value="vnc">VNC</option>
+                <option value="web">Web</option>
+                <option value="spice">SPICE</option>
+                <option value="vdi">VDI</option>
+            </select>
+            <span id="rec-count" class="text-sm text-[var(--text-muted)]" aria-live="polite"></span>
+        </div>
         <div class="card table-wrapper">
             <table class="w-full">
                 <thead>
@@ -157,6 +171,37 @@
     // Event delegation for play/delete buttons — registered once; the list
     // body is re-rendered on every refresh, so a listener inside the fetch
     // chain would stack one per load.
+    // Filtering is client-side over the page the server returned: the
+    // recordings list is paginated, so this narrows what is on screen rather
+    // than re-querying (the page counter still describes the page).
+    function applyRecordingFilters() {
+        var searchEl = document.getElementById('rec-search');
+        var protoEl = document.getElementById('rec-proto');
+        if (!searchEl || !protoEl) return;
+        var q = (searchEl.value || '').trim().toLowerCase();
+        var proto = (protoEl.value || '').toLowerCase();
+        var rows = Array.prototype.slice.call(document.querySelectorAll('#recordings-list tr'));
+        var shown = 0;
+        rows.forEach(function(tr) {
+            var cells = tr.querySelectorAll('td');
+            var rowProto = cells[1] ? cells[1].innerText.trim().toLowerCase() : '';
+            var text = (tr.innerText || '').toLowerCase();
+            var ok = (!proto || rowProto === proto) && (!q || text.indexOf(q) !== -1);
+            tr.hidden = !ok;
+            if (ok) shown++;
+        });
+        var count = document.getElementById('rec-count');
+        if (count) {
+            count.textContent = (q || proto)
+                ? shown + ' of ' + rows.length + ' on this page match'
+                : '';
+        }
+    }
+    var recSearchEl = document.getElementById('rec-search');
+    var recProtoEl = document.getElementById('rec-proto');
+    if (recSearchEl) recSearchEl.addEventListener('input', applyRecordingFilters);
+    if (recProtoEl) recProtoEl.addEventListener('change', applyRecordingFilters);
+
     document.getElementById('recordings-list').addEventListener('click', function(ev) {
         var btn = ev.target.closest('.rec-play, .rec-delete');
         if (!btn) return;
@@ -269,6 +314,7 @@
                         '</td>' +
                         '</tr>';
                 }).join('');
+                applyRecordingFilters();
             })
             .catch(function(e) {
                 listFail('Could not load recordings \u2014 ' + (e && e.message ? e.message : 'network error') + '.');

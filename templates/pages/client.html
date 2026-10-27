@@ -1074,17 +1074,30 @@
 
         // ── Screenshot ──
         document.getElementById('btn-screenshot').addEventListener('click', function() {
-            if (!window.__guac_client) return;
+            // Every early return used to be silent: clicking this while the
+            // session was ended or before the first frame drew looked like a
+            // dead button. Say what happened.
+            if (!window.__guac_client) {
+                showToast('Screenshot unavailable \u2014 the session is not connected.');
+                return;
+            }
             try {
                 var canvas = window.__guac_client.getDisplay().flatten();
-                if (!canvas || canvas.width === 0) return;
+                if (!canvas || canvas.width === 0) {
+                    showToast('Nothing to capture yet \u2014 waiting for the first frame.');
+                    return;
+                }
                 var a = document.createElement('a');
                 a.href = canvas.toDataURL('image/png');
                 a.download = 'persea-' + sessionId.substring(0, 8) + '-' + Date.now() + '.png';
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
-            } catch (e) { console.warn('[persea] screenshot failed:', e); }
+                showToast('Screenshot saved.');
+            } catch (e) {
+                console.warn('[persea] screenshot failed:', e);
+                showToast('Screenshot failed: ' + (e && e.message ? e.message : 'unknown error'));
+            }
         });
 
         // ── Fullscreen ──

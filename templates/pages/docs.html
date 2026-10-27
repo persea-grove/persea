@@ -14,6 +14,9 @@
     <aside id="toc-panel" class="toc-panel" aria-label="Documentation">
         <div class="toc-panel-inner">
             <h3 class="text-xs font-medium text-[var(--text-muted)] uppercase tracking-wider mb-3">Documentation</h3>
+            <input id="toc-filter" type="search" class="form-input mb-3"
+                   style="font-size:12px;padding:6px 10px" placeholder="Filter documents"
+                   aria-label="Filter documentation" autocomplete="off">
             <nav id="toc" class="space-y-1" role="navigation" aria-label="Documentation sections">
                 {% for doc in docs %}
                 <details class="toc-group">
@@ -204,6 +207,27 @@
         });
         setDrawer(false);
         updateToc();
+
+        // Filter the table of contents: a group stays visible when its title
+        // or any of its headings match, and non-matching headings are hidden.
+        var tocFilter = document.getElementById('toc-filter');
+        if (tocFilter) {
+            tocFilter.addEventListener('input', function() {
+                var q = this.value.trim().toLowerCase();
+                document.querySelectorAll('#toc .toc-group').forEach(function(group) {
+                    var docLink = group.querySelector('.toc-doc-link');
+                    var docMatch = !q || (docLink && docLink.textContent.toLowerCase().indexOf(q) !== -1);
+                    var anySub = false;
+                    group.querySelectorAll('.toc-sub-list li').forEach(function(li) {
+                        var hit = !q || li.textContent.toLowerCase().indexOf(q) !== -1;
+                        li.hidden = q ? !hit : false;
+                        if (hit && q) anySub = true;
+                    });
+                    group.hidden = q ? !(docMatch || anySub) : false;
+                    if (q && anySub) group.open = true;
+                });
+            });
+        }
 
         // Close the mobile drawer once a nav link is chosen.
         document.getElementById('toc').addEventListener('click', function(evt) {
