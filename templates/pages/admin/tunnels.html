@@ -133,8 +133,31 @@
             jumpHosts = await res.json();
             renderJumpHostsList();
             renderChainSelect();
+            syncChainControls();
         } catch (e) {
             console.error('Failed to load jump hosts:', e);
+        }
+    }
+
+    // Nothing to chain until a jump host exists: a live "Add Hop" that can
+    // only ever do nothing is the dead-control class of bug.
+    function syncChainControls() {
+        const addBtn = document.getElementById('btn-add-hop');
+        const clearBtn = document.getElementById('btn-clear-chain');
+        const select = document.getElementById('chain-add-select');
+        const none = jumpHosts.length === 0;
+        if (addBtn) {
+            addBtn.disabled = none || chain.length >= jumpHosts.length;
+            addBtn.title = none ? 'Add a jump host first' : '';
+        }
+        if (clearBtn) clearBtn.disabled = chain.length === 0;
+        if (select) {
+            select.disabled = none;
+            if (none) select.innerHTML = '<option value="">No jump hosts yet</option>';
+        }
+        if (none) {
+            const el = document.getElementById('chain-visual');
+            if (el) el.innerHTML = '<span class="text-[var(--text-muted)] text-sm">Add a jump host first — the chain is built from saved hosts.</span>';
         }
     }
 
@@ -323,12 +346,14 @@
     function clearChain() {
         chain = [];
         renderChain();
+        syncChainControls();
     }
 
     function renderChain() {
         const el = document.getElementById('chain-visual');
         if (chain.length === 0) {
             el.innerHTML = '<span class="text-[var(--text-muted)] text-sm">Add hops to build a tunnel chain</span>';
+            syncChainControls();
             return;
         }
         el.innerHTML = chain.map((jh, i) => {
