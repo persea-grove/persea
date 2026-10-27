@@ -219,8 +219,13 @@ function deleteUser(email) {
     document.getElementById('btn-cancel-delete-user').focus();
 }
 
-function toggleUserStatus(email, currentStatus) {
-    var endpoint = currentStatus === 'active'
+async function toggleUserStatus(email, currentStatus) {
+    var disabling = currentStatus === 'active';
+    if (disabling && !(await uiConfirm('Disable ' + email + '? They will not be able to sign in until re-enabled.',
+            { danger: true, confirmLabel: 'Disable' }))) {
+        return;
+    }
+    var endpoint = disabling
         ? '/api/users/' + encodeURIComponent(email) + '/disable'
         : '/api/users/' + encodeURIComponent(email) + '/enable';
     fetch(endpoint, { method: 'POST', headers: apiHeaders() })

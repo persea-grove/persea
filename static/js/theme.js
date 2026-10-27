@@ -254,18 +254,31 @@ document.addEventListener('click', function() { var m = document.getElementById(
         var btn = document.getElementById('theme-toggle');
         if (!btn) return;
         var labels = { dark: 'Dark', light: 'Light', auto: 'Auto' };
+        var nexts = { dark: 'Light', light: 'Auto', auto: 'Dark' };
         var svgs = { dark: _svgMoon, light: _svgSun, auto: _svgMonitor };
         var current = localStorage.getItem('theme') || 'auto';
-        btn.title = 'Theme: ' + (labels[current] || current) + ' (click to cycle)';
+        var currentLabel = labels[current] || current;
+        // The icon alone read as an unlabeled "monitor" button: the mode is now
+        // spelled out beside it and the accessible name stays in sync.
+        btn.title = 'Theme: ' + currentLabel + ' (click to switch to ' + (nexts[current] || 'Dark') + ')';
+        btn.setAttribute('aria-label', 'Theme: ' + currentLabel + ' — switch to ' + (nexts[current] || 'Dark'));
         var icon = btn.querySelector('.theme-icon');
         if (icon) {
             icon.innerHTML = svgs[current] || _svgMonitor;
         } else {
             var s = document.createElement('span');
             s.className = 'theme-icon';
+            s.setAttribute('aria-hidden', 'true');
             s.innerHTML = svgs[current] || _svgMonitor;
-            btn.appendChild(s);
+            btn.insertBefore(s, btn.firstChild);
         }
+        var text = btn.querySelector('.theme-label');
+        if (!text) {
+            text = document.createElement('span');
+            text.className = 'theme-label';
+            btn.appendChild(text);
+        }
+        text.textContent = currentLabel;
     }
 
     applyClass(theme);

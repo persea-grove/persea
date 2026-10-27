@@ -1672,3 +1672,7 @@ body, .recent-strip, .recent-modal-list, .conn-sidebar, .toc-panel, .table-wrap 
 .row-menu-list button:hover { background: var(--bg-hover); color: var(--text-primary); }
 .row-menu-list .row-menu-danger { color: var(--danger-text); }
 .row-menu-list .row-menu-danger:hover { background: var(--danger-bg); color: var(--danger-text); }
+/* Theme toggle: the mode is text, not just an icon (the "Auto" glyph looked
+   like an unlabeled monitor button). */
+.theme-label { font-size: 12px; line-height: 1; color: var(--text-secondary); }
+@media (max-width: 480px) { .theme-label { display: none; } }
