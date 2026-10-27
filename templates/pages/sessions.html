@@ -86,7 +86,7 @@
          history rows so `disconnected` and `logged_out` ends stay visible
          alongside the reason that was recorded at creation (V09). -->
     <div id="recent-ended" class="hidden mt-6">
-        <h2 class="text-sm font-semibold text-[var(--text-primary)] mb-3">Recent sessions</h2>
+        <h2 class="text-sm font-semibold text-[var(--text-primary)] mb-3" id="recent-ended-title">Recent sessions</h2>
         <div class="card table-wrapper">
             <table class="w-full"><thead><tr><th>Protocol</th><th>Target</th><th>Started</th><th>Duration</th><th>Status</th><th>Reason</th></tr></thead><tbody id="recent-ended-list"></tbody></table>
         </div>
@@ -263,14 +263,19 @@
         var cls = { active: 'status-active', pending: 'status-pending', disconnected: 'status-disconnected', logged_out: 'status-logged_out' }[s] || 'status-completed';
         return '<span class="status-pill ' + cls + '">' + escapeHtml((s || 'unknown').toUpperCase()) + '</span>';
     }
-    function renderSessions(sessions) {
+    // The filter bar governs both tables: the live list and the history below
+    // it. It used to filter only the live list, so with nothing live the
+    // selects looked like they did nothing.
+    function matchesFilters(s) {
         var protocolFilter = document.getElementById('filter-protocol').value;
         var statusFilter = document.getElementById('filter-status').value;
-        var shown = sessions.filter(function(s) {
-            if (protocolFilter && s.session_type !== protocolFilter) return false;
-            if (statusFilter && s.status !== statusFilter) return false;
-            return true;
-        });
+        if (protocolFilter && (s.session_type || '').toLowerCase() !== protocolFilter) return false;
+        if (statusFilter && s.status !== statusFilter) return false;
+        return true;
+    }
+
+    function renderSessions(sessions) {
+        var shown = sessions.filter(matchesFilters);
         var active = sessions.filter(function(s) { return s.status === 'active'; }).length;
         var pending = sessions.filter(function(s) { return s.status === 'pending'; }).length;
         var disconnected = sessions.filter(function(s) { return s.status === 'disconnected'; }).length;
@@ -340,8 +345,14 @@
     function protoClass(p) {
         return { ssh: 'proto-ssh', rdp: 'proto-rdp', vnc: 'proto-vnc', spice: 'proto-spice', web: 'proto-web', vdi: 'proto-vdi', proxmox: 'proto-proxmox' }[p] || '';
     }
-    document.getElementById('filter-protocol').addEventListener('change', loadSessions);
-    document.getElementById('filter-status').addEventListener('change', loadSessions);
+    document.getElementById('filter-protocol').addEventListener('change', function() {
+        loadSessions();
+        renderRecentRows();
+    });
+    document.getElementById('filter-status').addEventListener('change', function() {
+        loadSessions();
+        renderRecentRows();
+    });
 
     // ── Recent sessions (V10) ──
     // History rows for the current user: status distinguishes a plain
@@ -349,6 +360,38 @@
     // `logged_out`); the recorded reason (V09) is shown when present.
     var recentEl = document.getElementById('recent-ended');
     var recentListEl = document.getElementById('recent-ended-list');
+    var recentRows = [];
+
+    function renderRecentRows() {
+        var rows = (recentRows || []).filter(matchesFilters);
+        recentEl.classList.toggle('hidden', (recentRows || []).length === 0);
+        var title = document.getElementById('recent-ended-title');
+        if (title) {
+            title.textContent = 'Recent sessions'
+                + (recentRows.length ? ' (' + rows.length + ' of ' + recentRows.length + ')' : '');
+        }
+        if (!rows.length) {
+            recentListEl.innerHTML = '<tr><td colspan="6" class="text-sm text-[var(--text-muted)] py-6 text-center">'
+                + 'No sessions match the filters.</td></tr>';
+            return;
+        }
+        recentListEl.innerHTML = rows.map(function(s) {
+            var proto = (s.session_type || '').toLowerCase();
+            var target = s.entry_display_name || s.hostname || '\u2014';
+            var status = s.status || 'unknown';
+            var dur = s.duration_secs ? Math.floor(s.duration_secs / 60) + 'm' : '\u2014';
+            var reason = s.reason ? escapeHtml(s.reason) : '<span class="text-[var(--text-muted)]">\u2014</span>';
+            return '<tr>'
+                + '<td><span class="' + protoClass(proto) + '" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid">' + escapeHtml((proto || '?').toUpperCase()) + '</span></td>'
+                + '<td class="text-sm text-[var(--text-secondary)]">' + escapeHtml(target) + '</td>'
+                + '<td class="text-sm text-[var(--text-muted)]">' + escapeHtml(s.started_at || '\u2014') + '</td>'
+                + '<td class="text-sm text-[var(--text-muted)]">' + dur + '</td>'
+                + '<td>' + statusPill(status) + '</td>'
+                + '<td class="text-sm text-[var(--text-secondary)]" style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escapeAttr(s.reason || '') + '">' + reason + '</td>'
+                + '</tr>';
+        }).join('');
+    }
+
     function loadRecentEnded() {
         fetch('/api/sessions/recent', { headers: apiHeaders(), credentials: 'same-origin' })
             .then(function(r) {
@@ -357,24 +400,8 @@
                 return r.json();
             })
             .then(function(data) {
-                var rows = (data && data.recent) || [];
-                recentEl.classList.toggle('hidden', rows.length === 0);
-                if (!rows.length) return;
-                recentListEl.innerHTML = rows.map(function(s) {
-                    var proto = (s.session_type || '').toLowerCase();
-                    var target = s.entry_display_name || s.hostname || '\u2014';
-                    var status = s.status || 'unknown';
-                    var dur = s.duration_secs ? Math.floor(s.duration_secs / 60) + 'm' : '\u2014';
-                    var reason = s.reason ? escapeHtml(s.reason) : '<span class="text-[var(--text-muted)]">\u2014</span>';
-                    return '<tr>'
-                        + '<td><span class="' + protoClass(proto) + '" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid">' + escapeHtml((proto || '?').toUpperCase()) + '</span></td>'
-                        + '<td class="text-sm text-[var(--text-secondary)]">' + escapeHtml(target) + '</td>'
-                        + '<td class="text-sm text-[var(--text-muted)]">' + escapeHtml(s.started_at || '\u2014') + '</td>'
-                        + '<td class="text-sm text-[var(--text-muted)]">' + dur + '</td>'
-                        + '<td>' + statusPill(status) + '</td>'
-                        + '<td class="text-sm text-[var(--text-secondary)]" style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escapeAttr(s.reason || '') + '">' + reason + '</td>'
-                        + '</tr>';
-                }).join('');
+                recentRows = (data && data.recent) || [];
+                renderRecentRows();
             })
             .catch(function(e) { showListError('Could not load recent sessions \u2014 ' + (e && e.message ? e.message : 'network error') + '.'); });
     }
