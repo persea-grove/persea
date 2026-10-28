@@ -74,6 +74,15 @@ var UI_DIALOG_CSS = [
   'background:var(--bg-hover,#334155);color:var(--text-primary,#e2e8f0)}',
   '.ui-dialog-btn:hover{filter:brightness(1.12)}',
   '.ui-dialog-btn:focus-visible{outline:2px solid var(--accent,#60a5fa);outline-offset:2px}',
+  '.ui-dialog-btn:disabled{opacity:.45;cursor:not-allowed;filter:none}',
+  '.ui-dialog-field{margin:0 0 18px}',
+  '.ui-dialog-field-label{display:block;font-size:12.5px;line-height:1.4;margin-bottom:6px;',
+  'color:var(--text-muted,#94a3b8);word-break:break-word}',
+  '.ui-dialog-input{box-sizing:border-box;width:100%;padding:9px 11px;font:inherit;font-size:13.5px;',
+  'color:var(--text-primary,#e2e8f0);background:var(--bg-input,#0f172a);',
+  'border:1px solid var(--border,#334155);border-radius:7px}',
+  '.ui-dialog-input:focus{outline:none;border-color:var(--border-focus,#3b82f6);',
+  'box-shadow:0 0 0 2px rgba(59,130,246,.25)}',
   '.ui-dialog-btn-ok{background:var(--accent,#2563eb);border-color:var(--accent,#2563eb);',
   'color:var(--accent-contrast,#f8fafc)}',
   '.ui-dialog-btn-danger{background:var(--danger,#b91c1c);border-color:var(--danger,#b91c1c);',
@@ -111,6 +120,26 @@ function uiDialog(message, opts) {
     text.textContent = String(message == null ? '' : message);
     card.appendChild(text);
 
+    var requireText = typeof opts.requireText === 'string' ? opts.requireText : '';
+    var confirmInput = null;
+    if (requireText && !opts.alertOnly) {
+        var field = document.createElement('div');
+        field.className = 'ui-dialog-field';
+        var label = document.createElement('label');
+        label.className = 'ui-dialog-field-label';
+        label.htmlFor = 'ui-dialog-confirm-input';
+        label.textContent = 'Type ' + requireText + ' to confirm';
+        confirmInput = document.createElement('input');
+        confirmInput.type = 'text';
+        confirmInput.id = 'ui-dialog-confirm-input';
+        confirmInput.className = 'ui-dialog-input';
+        confirmInput.autocomplete = 'off';
+        confirmInput.spellcheck = false;
+        field.appendChild(label);
+        field.appendChild(confirmInput);
+        card.appendChild(field);
+    }
+
     var actions = document.createElement('div');
     actions.className = 'ui-dialog-actions';
 
@@ -126,6 +155,12 @@ function uiDialog(message, opts) {
 
     if (!opts.alertOnly) actions.appendChild(cancelBtn);
     actions.appendChild(okBtn);
+    if (confirmInput) {
+        okBtn.disabled = true;
+        confirmInput.addEventListener('input', function() {
+            okBtn.disabled = confirmInput.value.trim() !== requireText;
+        });
+    }
     card.appendChild(actions);
     overlay.appendChild(card);
     document.body.appendChild(overlay);
@@ -147,7 +182,8 @@ function uiDialog(message, opts) {
         function onKey(e) {
             if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); }
             else if (e.key === 'Enter' && document.activeElement !== cancelBtn) {
-                e.preventDefault(); e.stopPropagation(); finish(true);
+                e.preventDefault(); e.stopPropagation();
+                if (!okBtn.disabled) finish(true);
             }
         }
         okBtn.addEventListener('click', function(e) { e.stopPropagation(); finish(true); });
@@ -157,7 +193,19 @@ function uiDialog(message, opts) {
         });
         overlay.addEventListener('keydown', function(e) { e.stopPropagation(); });
         document.addEventListener('keydown', onKey, true);
-        okBtn.focus();
+        if (confirmInput) {
+            // Enter inside the field submits only when the text matches;
+            // the document-level handler ignores a disabled confirm.
+            confirmInput.addEventListener('keydown', function(e) {
+                if (e.key !== 'Enter') return;
+                e.preventDefault();
+                e.stopPropagation();
+                if (!okBtn.disabled) finish(true);
+            });
+            confirmInput.focus();
+        } else {
+            okBtn.focus();
+        }
     });
 }
 

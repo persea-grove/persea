@@ -1163,7 +1163,11 @@
         var warning = affected.length > 1
             ? 'Delete personal folder "' + folder.path + '" and its ' + (affected.length - 1) + ' subfolder(s)?\n\nEntry references are removed; the shared entries themselves are untouched.'
             : 'Delete personal folder "' + folder.path + '"?\n\nEntry references are removed; the shared entries themselves are untouched.';
-        if (!(await uiConfirm(warning, { danger: true, confirmLabel: 'Delete' }))) return;
+        if (!(await uiConfirm(warning, {
+            danger: true,
+            confirmLabel: 'Delete',
+            requireText: affected.length > 1 ? folder.path : null
+        }))) return;
         var chain = Promise.resolve();
         affected.forEach(function(f) {
             chain = chain.then(function() {
@@ -2672,13 +2676,32 @@
             saveBtn.textContent = 'Save';
         });
     }
+    async function folderHasContents(folder) {
+        if (folder.has_children) return true;
+        try {
+            var res = await fetch('/api/addressbook/folders/' + encodeURIComponent(folder.scope) + '/' +
+                encodeURIComponent(folder.path) + '/entries', { credentials: 'same-origin' });
+            if (!res.ok) return true;  // unknown -> assume the worst
+            var data = await res.json();
+            var items = Array.isArray(data) ? data : (data.entries || []);
+            return items.length > 0;
+        } catch (e) {
+            return true;
+        }
+    }
+
     async function deleteFolder() {
         if (!selectedFolder) return;
         var selPath = selectedFolder.path;
+        var hasContents = await folderHasContents(selectedFolder);
         var warning = selectedFolder.has_children
             ? 'Delete folder "' + selPath + '" AND all its subfolders and entries?\n\nThis recursively removes the entire subtree and cannot be undone.'
             : 'Delete folder "' + selPath + '" and all its entries?\n\nThis cannot be undone.';
-        if (!(await uiConfirm(warning, { danger: true, confirmLabel: 'Delete' }))) return;
+        if (!(await uiConfirm(warning, {
+            danger: true,
+            confirmLabel: 'Delete',
+            requireText: hasContents ? selPath : null
+        }))) return;
         fetch('/api/addressbook/folders/' + encodeURIComponent(selectedFolder.scope) + '/' + encodeURIComponent(selPath), {
             method: 'DELETE',
             headers: apiHeaders(),
