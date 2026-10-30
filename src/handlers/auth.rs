@@ -263,23 +263,6 @@ pub struct LoginQueryParams {
 /// session cookie is already present. First run redirects to the setup
 /// wizard (no users exist yet).
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn safe_next_path(next: Option<String>) -> String {
-    const DEFAULT: &str = "/connections.html";
-    let Some(next) = next else { return DEFAULT.to_string() };
-    let next = next.trim();
-    if next.is_empty() || next == "/" || next.starts_with("/?") {
-        return DEFAULT.to_string();
-    }
-    if !next.starts_with('/') || next.starts_with("//") || next.contains('\\') {
-        return DEFAULT.to_string();
-    }
-    let lower = next.to_ascii_lowercase();
-    if lower.contains("://") || lower.contains("%2f%2f") {
-        return DEFAULT.to_string();
-    }
-    next.to_string()
-}
-
 pub async fn login_page(
     State(state): State<crate::api::AppState>,
     _addr: ConnectInfo<SocketAddr>,
@@ -363,7 +346,6 @@ pub async fn login_submit(
     axum::extract::Form(form): axum::extract::Form<LoginFormData>,
 ) -> Response {
     let client_ip = client_ip(&headers, addr.ip(), &trusted_proxies.0);
-    let next_after_login = safe_next_path(form.next.clone());
 
     // SAML SSO start: the login page's SAML button posts here with `saml=1`
     // (no username/password yet). The chain's SAML provider builds a signed
@@ -1050,7 +1032,7 @@ pub async fn mfa_submit(
             (header::SET_COOKIE, session_cookie),
             (header::SET_COOKIE, clear_mfa_cookie),
         ]),
-        Redirect::to(&next_after_login),
+        Redirect::to("/connections.html"),
     )
         .into_response()
 }
@@ -1206,8 +1188,6 @@ pub struct LoginFormData {
     /// flag when SAML is used).
     #[serde(default, deserialize_with = "deserialize_flag")]
     pub desktop: bool,
-    #[serde(default)]
-    pub next: Option<String>,
 }
 
 /// Deserialize a form flag that may arrive as `1`/`0` (the HTML checkbox
