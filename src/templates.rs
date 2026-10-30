@@ -388,6 +388,9 @@ pub struct LoginTemplate {
     pub oidc_providers: Vec<String>,
     /// Error message from a failed login redirect (`/?error=...`).
     pub error: Option<String>,
+    /// Where to send the user after a successful password login (validated
+    /// server-side to a local path only).
+    pub next: String,
     /// CSP nonce for the inline scripts on the login page.
     pub csp_nonce: String,
 }

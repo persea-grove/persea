@@ -71,6 +71,7 @@
         {% if saml_enabled %}
         <form method="POST" action="/auth/login" id="saml-form">
             <input type="hidden" name="csrf_token" value="">
+            <input type="hidden" name="next" value="{{ next }}">
             <input type="hidden" name="saml" value="1">
             <button type="submit" class="btn btn-secondary mb-4" style="gap:8px;width:100%">
                 <svg class="sso-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -91,6 +92,7 @@
         <!-- Form -->
         <form method="POST" action="/auth/login" id="login-form">
             <input type="hidden" name="csrf_token" value="">
+            <input type="hidden" name="next" value="{{ next }}">
             <div class="form-group">
                 <label class="form-label" for="username">Email</label>
                 <input type="text" id="username" name="username" autocomplete="username" required

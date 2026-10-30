@@ -846,7 +846,11 @@ pub async fn require_auth(
             .map(|v| v.contains("text/html"))
             .unwrap_or(false);
     if wants_html {
-        return Redirect::to("/?error=login_required").into_response();
+        let target = format!(
+            "/?error=login_required&next={}",
+            urlencoding::encode(request.uri().path())
+        );
+        return Redirect::to(&target).into_response();
     }
 
     crate::error::AppError::error_response(
